@@ -3,6 +3,7 @@
 __pycache__/
 *.pyc
 
+archive/
 obsidian_vault/Daily/
 obsidian_vault/Papers/
 obsidian_vault/Weekly_Archive/

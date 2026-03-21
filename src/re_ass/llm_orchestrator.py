@@ -55,10 +55,15 @@ class LlmOrchestrator:
             before_state = {path.resolve(): path.stat().st_mtime_ns for path in papers_dir.glob("*.md")}
             prompt = f"Use /summarise-paper skill to summarise {paper.arxiv_url} and write to {papers_dir}"
             try:
-                self._run_prompt(prompt)
+                response = self._run_prompt(prompt)
                 detected_path = self._detect_created_note(papers_dir, before_state, paper, expected_note_path)
                 if detected_path is not None:
                     return detected_path
+                LOGGER.warning(
+                    "Paper note command completed without creating a note for %s. CLI response: %s",
+                    paper.title,
+                    self._truncate_words(self._clean_summary(response), limit=40) or "<empty>",
+                )
             except LlmCommandError as error:
                 LOGGER.warning("Paper note generation failed for %s: %s", paper.title, error)
 

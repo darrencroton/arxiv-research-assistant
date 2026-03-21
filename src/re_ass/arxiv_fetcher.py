@@ -62,9 +62,19 @@ def _to_paper(result: Any) -> ArxivPaper:
     )
 
 
-def filter_recent_papers(papers: Iterable[ArxivPaper], cutoff: datetime) -> list[ArxivPaper]:
-    cutoff_utc = _ensure_utc(cutoff)
-    return [paper for paper in papers if _ensure_utc(paper.published) >= cutoff_utc]
+def filter_papers_between(
+    papers: Iterable[ArxivPaper],
+    *,
+    start: datetime,
+    end: datetime,
+) -> list[ArxivPaper]:
+    start_utc = _ensure_utc(start)
+    end_utc = _ensure_utc(end)
+    return [
+        paper
+        for paper in papers
+        if start_utc <= _ensure_utc(paper.published) < end_utc
+    ]
 
 
 def _normalize_token(token: str) -> str:
@@ -174,18 +184,19 @@ class ArxivFetcher:
         )
         results = list(self.client.results(search))
         all_papers = [_to_paper(result) for result in results]
-        cutoff = self.now_provider() - self.fetch_window
+        window_end = self.now_provider()
+        cutoff = window_end - self.fetch_window
         primary_ranked = rank_papers(
-            filter_recent_papers(all_papers, cutoff),
+            filter_papers_between(all_papers, start=cutoff, end=window_end),
             preferences.priorities,
             max_papers,
         )
         if len(primary_ranked) >= max_papers or self.fallback_window is None:
             return primary_ranked
 
-        fallback_cutoff = self.now_provider() - self.fallback_window
+        fallback_cutoff = window_end - self.fallback_window
         fallback_ranked = rank_papers(
-            filter_recent_papers(all_papers, fallback_cutoff),
+            filter_papers_between(all_papers, start=fallback_cutoff, end=window_end),
             preferences.priorities,
             max_papers,
         )

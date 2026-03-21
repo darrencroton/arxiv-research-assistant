@@ -89,6 +89,18 @@ def test_rotate_weekly_note_moves_previous_note_on_sunday(tmp_path: Path) -> Non
     assert manager.config.weekly_note_file.read_text(encoding="utf-8") == DEFAULT_WEEKLY_TEMPLATE
 
 
+def test_rotate_weekly_note_skips_pristine_template_on_first_sunday(tmp_path: Path) -> None:
+    manager = VaultManager(make_config(tmp_path))
+    manager.bootstrap()
+
+    rotated = manager.rotate_weekly_note_if_needed(date(2026, 3, 22))
+
+    archive_path = manager.config.weekly_archive_dir / "2026-03-22-arxiv.md"
+    assert rotated is False
+    assert not archive_path.exists()
+    assert manager.config.weekly_note_file.read_text(encoding="utf-8") == DEFAULT_WEEKLY_TEMPLATE
+
+
 def test_update_weekly_note_replaces_same_day_section(tmp_path: Path) -> None:
     manager = VaultManager(make_config(tmp_path))
     manager.bootstrap()

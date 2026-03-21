@@ -48,6 +48,10 @@ class VaultManager:
         if archive_path.exists():
             return False
 
+        weekly_note_text = self.config.weekly_note_file.read_text(encoding="utf-8")
+        if self._is_pristine_weekly_note(weekly_note_text):
+            return False
+
         if self.config.weekly_note_file.exists():
             shutil.move(str(self.config.weekly_note_file), str(archive_path))
 
@@ -137,3 +141,6 @@ class VaultManager:
             lines.extend(entries)
 
         return "\n".join(lines).rstrip() + "\n"
+
+    def _is_pristine_weekly_note(self, text: str) -> bool:
+        return text.strip() == self.config.weekly_template_file.read_text(encoding="utf-8").strip()

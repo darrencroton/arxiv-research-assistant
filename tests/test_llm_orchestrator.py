@@ -1,6 +1,8 @@
 from pathlib import Path
 import subprocess
 
+import pytest
+
 from re_ass.llm_orchestrator import LlmOrchestrator
 from re_ass.models import ArxivPaper
 
@@ -61,3 +63,32 @@ def test_process_paper_uses_llm_output_when_command_succeeds(tmp_path: Path) -> 
     assert processed.note_name == "LLM Generated Note"
     assert processed.micro_summary == "Short LLM summary."
     assert any(prompt.startswith("Use /summarise-paper skill") for prompt in seen_prompts)
+
+
+def test_process_paper_logs_when_llm_returns_without_creating_note(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    def fake_runner(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        prompt = str(command[-1])
+        if prompt.startswith("Use /summarise-paper skill"):
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout="I need permission to fetch web content before I can summarise the paper.",
+                stderr="",
+            )
+        if prompt.startswith("Summarise the following arXiv abstract"):
+            return subprocess.CompletedProcess(command, 0, stdout="Short LLM summary.", stderr="")
+        raise AssertionError(f"Unexpected prompt: {prompt}")
+
+    orchestrator = LlmOrchestrator(
+        command_prefix=("echo",),
+        timeout_seconds=30,
+        enabled=True,
+        allow_local_paper_note_fallback=True,
+        runner=fake_runner,
+    )
+
+    processed = orchestrator.process_paper(make_paper(), tmp_path)
+
+    assert processed.note_path.exists()
+    assert "without creating a note" in caplog.text
+    assert "permission to fetch web content" in caplog.text

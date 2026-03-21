@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
-from re_ass.arxiv_fetcher import ArxivFetcher, build_category_query, filter_recent_papers, rank_papers
+from re_ass.arxiv_fetcher import ArxivFetcher, build_category_query, filter_papers_between, rank_papers
 from re_ass.models import PreferenceConfig
 from re_ass.models import ArxivPaper
 
@@ -30,16 +30,18 @@ def test_build_category_query_joins_categories() -> None:
     assert build_category_query(("cs.AI", "cs.CL")) == "cat:cs.AI OR cat:cs.CL"
 
 
-def test_filter_recent_papers_respects_cutoff() -> None:
-    now = datetime(2026, 3, 21, 12, 0, tzinfo=timezone.utc)
+def test_filter_papers_between_respects_start_and_end_bounds() -> None:
+    start = datetime(2026, 3, 20, 12, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 3, 21, 12, 0, tzinfo=timezone.utc)
     papers = [
-        make_paper(title="Recent Agents", summary="Agents", published_offset_hours=6),
-        make_paper(title="Old Agents", summary="Agents", published_offset_hours=30),
+        make_paper(title="Inside Window", summary="Agents", published_offset_hours=18),
+        make_paper(title="Too Old", summary="Agents", published_offset_hours=30),
+        make_paper(title="Future Paper", summary="Agents", published_offset_hours=-1),
     ]
 
-    recent = filter_recent_papers(papers, now - timedelta(hours=24))
+    recent = filter_papers_between(papers, start=start, end=end)
 
-    assert [paper.title for paper in recent] == ["Recent Agents"]
+    assert [paper.title for paper in recent] == ["Inside Window"]
 
 
 def test_rank_papers_prefers_highest_ranked_preference_then_recency() -> None:

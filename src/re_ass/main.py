@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-from datetime import date
+from datetime import date, datetime, time, timedelta, timezone
 import logging
 from pathlib import Path
 
@@ -13,6 +13,14 @@ from re_ass.vault_manager import VaultManager
 
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _determine_window_end(target_date: date, *, explicit_date: bool) -> datetime:
+    local_timezone = datetime.now().astimezone().tzinfo or timezone.utc
+    if explicit_date:
+        next_day = target_date + timedelta(days=1)
+        return datetime.combine(next_day, time.min, tzinfo=local_timezone).astimezone(timezone.utc)
+    return datetime.now(timezone.utc)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -50,6 +58,7 @@ def run(config: AppConfig, run_date: date | None = None) -> int:
         max_results=config.arxiv_max_results,
         fetch_window_hours=config.fetch_window_hours,
         fallback_window_hours=config.fallback_window_hours,
+        now_provider=lambda: _determine_window_end(target_date, explicit_date=run_date is not None),
     )
     papers = fetcher.fetch_top_papers(preferences, config.max_papers)
     if not papers:
