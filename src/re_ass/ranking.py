@@ -58,6 +58,7 @@ _FIELD_WEIGHTS = {
     "authors": 0.6,
 }
 _FUSION_OFFSET = 60.0
+_DIRECT_POOL_MIN_SELECTION_SCORE = 50.0
 _CONCEPT_ALIASES = {
     "little_red_dots": (
         "little red dot",
@@ -973,6 +974,7 @@ class PaperRanker:
             raise RankingError("Ranking payload must contain a 'selected_papers' list.")
 
         by_key = {item.paper_key: item for item in final_pool}
+        score_floor = self._effective_min_selection_score(final_pool)
         seen_ids: set[str] = set()
         selected: list[SelectedPaper] = []
         for entry in raw_selected:
@@ -996,7 +998,7 @@ class PaperRanker:
                 raise RankingError(f"Ranking payload for '{candidate_id}' is missing a rationale.")
 
             seen_ids.add(candidate_id)
-            if float(score) < self.min_selection_score:
+            if float(score) < score_floor:
                 continue
 
             item = by_key[candidate_id]
@@ -1013,3 +1015,8 @@ class PaperRanker:
             if len(selected) >= max_papers:
                 break
         return selected
+
+    def _effective_min_selection_score(self, final_pool: list[RerankedPaper]) -> float:
+        if final_pool and all("direct" in item.retrieval_channels for item in final_pool):
+            return min(self.min_selection_score, _DIRECT_POOL_MIN_SELECTION_SCORE)
+        return self.min_selection_score

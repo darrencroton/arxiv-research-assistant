@@ -327,6 +327,42 @@ def test_paper_ranker_sends_small_candidate_pools_wholesale_without_retrieval_tr
     assert "AGN feedback in SAMs" in provider.calls[0]["user_prompt"]
 
 
+def test_paper_ranker_uses_relaxed_score_floor_for_direct_small_pools(tmp_path) -> None:
+    papers = [
+        make_paper(arxiv_id="2603.40051", title="AGN metallicity calibrations"),
+        make_paper(arxiv_id="2603.40052", title="PAH variations in AGN hosts"),
+        make_paper(arxiv_id="2603.40053", title="Black hole spin-up in proto-stellar clusters"),
+    ]
+    provider = RecordingProvider(
+        json.dumps(
+            {
+                "selected_papers": [
+                    {"candidate_id": "arxiv:2603.40051", "score": 72, "rationale": "Strong AGN relevance."},
+                    {"candidate_id": "arxiv:2603.40052", "score": 55, "rationale": "Useful secondary AGN fit."},
+                    {"candidate_id": "arxiv:2603.40053", "score": 48, "rationale": "Marginal black-hole fit."},
+                ]
+            }
+        )
+    )
+    ranker = PaperRanker(
+        provider=provider,
+        config=make_app_config(tmp_path).llm,
+        retrieval_pool_size=12,
+        final_pool_size=6,
+        min_selection_score=80.0,
+        passthrough_candidate_count=50,
+        retriever=FailIfCalledRetriever(),
+        reranker=FailIfCalledReranker(),
+    )
+
+    selection = ranker.select_top_papers(astroph_preferences(), papers, max_papers=3)
+
+    assert [paper.title for paper in selection.selected_papers] == [
+        "AGN metallicity calibrations",
+        "PAH variations in AGN hosts",
+    ]
+
+
 def test_paper_ranker_rejects_unknown_candidate_in_final_selection_payload(tmp_path) -> None:
     paper = make_paper(arxiv_id="2603.40031", title="Only Paper")
     provider = RecordingProvider(
