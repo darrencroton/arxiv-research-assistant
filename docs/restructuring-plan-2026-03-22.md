@@ -29,8 +29,8 @@ The current code already performs the core workflow successfully:
 - fetch recent arXiv papers
 - rank papers
 - suppress duplicates
-- generate or fall back to paper notes
-- update daily and weekly notes
+- generate or fall back to paper summaries
+- update daily and weekly summaries
 - support historical backfill with `--date`
 
 The problem is not missing core functionality. The problem is that the current implementation is structurally uneven:
@@ -159,8 +159,8 @@ These principles govern the final design:
 - title-based duplicate suppression
 - note generation through the vendored summariser
 - deterministic local fallbacks when LLM generation is unavailable
-- daily note updates
-- weekly note rotation and synthesis updates
+- daily summary updates
+- weekly summary rotation and synthesis updates
 - backfill with `--date`
 
 ### What is structurally wrong today
@@ -221,9 +221,9 @@ High. The restructure solves real stability, maintainability, and transparency p
 ```text
 re-ass/
 ├── output/
-│   ├── papers/                     # Generated paper notes
-│   ├── daily/                      # Daily notes
-│   └── weekly/                     # Current weekly note + archives
+│   ├── papers/                     # Generated paper summaries
+│   ├── daily/                      # Daily summaries
+│   └── weekly/                     # Current weekly summary + archives
 ├── processed/                      # Retained PDFs for successfully processed papers
 ├── state/
 │   ├── papers/                     # Per-paper machine-readable records
@@ -331,8 +331,8 @@ re-ass/
 ### `note_manager.py`
 
 - bootstrap output/templates
-- manage daily note updates
-- manage weekly note creation, rotation, archive naming, and synthesis block updates
+- manage daily summary updates
+- manage weekly summary creation, rotation, archive naming, and synthesis block updates
 - render links according to config
 - update only within managed markers
 
@@ -399,7 +399,7 @@ max_output_tokens = 12288
 temperature = 0.2
 retry_attempts = 3
 allow_local_paper_note_fallback = true
-prompt_debug_file = "archive/paper_summariser/prompt.txt"
+prompt_debug_file = "tmp/paper_summariser/prompt.txt"
 download_timeout_seconds = 120
 max_pdf_size_mb = 100
 marker_timeout_seconds = 300
@@ -561,13 +561,13 @@ This is the right final design because it supports user-owned templates without 
 
 ### `markdown`
 
-- Render relative links from the current note to the paper note.
-- Example from daily note to paper note:
+- Render relative links from the current summary to the paper summary.
+- Example from daily summary to paper summary:
   `[Paper Title](../papers/<filename>.md)`
 
 ### Rule
 
-All link rendering must be centralised in one helper. Daily and weekly note logic must not hardcode link syntax.
+All link rendering must be centralised in one helper. Daily and weekly summary logic must not hardcode link syntax.
 
 ---
 
@@ -695,10 +695,11 @@ This is the intended final workflow for `uv run re-ass` and `uv run re-ass --dat
    - `state/runs/`
    - `logs/`
 3. **Ensure templates and preferences exist** if configured local defaults are missing.
-4. **Rotate weekly note if required**:
+4. **Rotate weekly summary if required** for a non-backfill run:
    - default rotation day is Monday
    - archive filename uses `archive_name_pattern`
-   - note rotation preserves user template structure and managed markers
+   - rotation preserves user template structure and managed markers
+   - explicit historical backfills leave the current weekly summary unchanged
 5. **Load user preferences** from `preferences.md`.
 6. **Fetch recent papers from arXiv** for configured categories and time window.
 7. **Rank papers** against user priorities.
@@ -713,16 +714,16 @@ This is the intended final workflow for `uv run re-ass` and `uv run re-ass --dat
    - store in paper bundle/state
 10. **Process papers in rank order**:
    - stage PDF download
-   - generate paper note through vendored summariser or deterministic fallback
+   - generate paper summary through vendored summariser or deterministic fallback
    - commit retained PDF to `processed/`
    - write note to `output/papers/`
    - persist/update `state/papers/<paper_key>.json`
 11. **Handle failures per paper transactionally**:
-   - failed paper does not update daily/weekly notes
+   - failed paper does not update daily/weekly summaries
    - error is recorded in state/logs
    - remaining papers continue unless an explicit fatal condition occurs
-12. **Update daily note** with the highest-ranked successfully completed paper using template markers.
-13. **Update weekly note** with all successfully completed papers from the run using template markers.
+12. **Update daily summary** with the highest-ranked successfully completed paper using template markers.
+13. **Update weekly summary** with all successfully completed papers from the run using template markers, except explicit historical backfills which leave the current weekly summary unchanged.
 14. **Generate weekly synthesis** from existing synthesis plus new micro-summaries:
    - use provider if enabled
    - otherwise deterministic fallback
@@ -733,7 +734,7 @@ This is the intended final workflow for `uv run re-ass` and `uv run re-ass --dat
 
 If no unseen papers remain after duplicate suppression, or if none complete successfully:
 
-- do not mutate daily or weekly notes
+- do not mutate daily or weekly summaries
 - write a clear log entry
 - exit `0`
 
@@ -865,8 +866,8 @@ Steps:
 2. Generate micro-summaries immediately after ranking.
 3. Replace list-comprehension processing with explicit per-paper transactional flow.
 4. Continue past non-fatal per-paper failures.
-5. Update daily note from the highest-ranked successful paper.
-6. Update weekly note from all successful papers.
+5. Update daily summary from the highest-ranked successful paper.
+6. Update weekly summary from all successful papers, except explicit historical backfills which leave the current weekly summary unchanged.
 7. Write run summaries and diagnostics.
 8. Add integration tests for:
    - zero new papers
@@ -969,4 +970,3 @@ At the end of this work, `re-ass` should be:
 - free of dead compatibility code and misleading naming
 
 That is the end state this plan targets.
-

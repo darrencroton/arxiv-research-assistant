@@ -140,3 +140,36 @@ def test_pipeline_leaves_papers_retryable_when_note_update_fails(tmp_path: Path,
     record_path = config.state_papers_dir / "arxiv_2603.30031.json"
     assert record_path.exists()
     assert '"status": "note_written"' in record_path.read_text(encoding="utf-8")
+
+
+def test_pipeline_backfill_leaves_current_weekly_summary_unchanged(tmp_path: Path, monkeypatch) -> None:
+    config = make_app_config(tmp_path)
+    manager = NoteManager(config)
+    manager.bootstrap()
+    manager.weekly_note_path.write_text(
+        "# This Week's ArXiv Overview\n\n"
+        "## Synthesis\n"
+        "<!-- re-ass:weekly-synthesis:start -->\n"
+        "Live synthesis.\n"
+        "<!-- re-ass:weekly-synthesis:end -->\n\n"
+        "---\n"
+        "## Daily Additions\n"
+        "<!-- re-ass:weekly-daily-additions:start -->\n"
+        "### Sunday\n"
+        "- Existing summary\n"
+        "<!-- re-ass:weekly-daily-additions:end -->\n",
+        encoding="utf-8",
+    )
+    paper = make_paper(arxiv_id="2603.30041", title="Backfill Paper")
+    monkeypatch.setattr("re_ass.pipeline.ArxivFetcher", lambda **_kwargs: FakeFetcher([paper]))
+    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr("re_ass.pipeline.GenerationService", lambda **_kwargs: FakeGenerationService())
+
+    exit_code = run(config, date(2026, 3, 23), backfill=True)
+
+    assert exit_code == 0
+    assert "Backfill Paper" in (config.daily_dir / "2026-03-23.md").read_text(encoding="utf-8")
+    weekly_text = manager.weekly_note_path.read_text(encoding="utf-8")
+    assert "Live synthesis." in weekly_text
+    assert "Backfill Paper" not in weekly_text
+    assert not (config.weekly_dir / "2026-03-23-weekly-arxiv.md").exists()

@@ -4,7 +4,7 @@
 
 - GitHub repo name: `research-assistant`
 - Local package / CLI name: `re-ass`
-- Purpose: fetch relevant arXiv papers, generate Markdown notes, and maintain daily/weekly outputs with explicit retained state
+- Purpose: fetch relevant arXiv papers, generate Markdown summaries, and maintain daily/weekly outputs with explicit retained state
 
 ## Core Commands
 
@@ -34,5 +34,6 @@
 - Store simulation or retained runtime artifacts under `archive/`.
 - Keep the paper-note path upstream-first: adapt at the app boundary instead of rewriting the provider/extraction stack.
 - Paper identity is stable and arXiv-derived; do not fall back to title-based duplicate suppression.
-- Daily and weekly note updates must stay inside managed markers.
+- Daily and weekly summary updates must stay inside managed markers.
+- Explicit `--date` backfills must not rotate or rewrite the current weekly summary.
 - `state/papers/*.json` is the authoritative completion record; note or PDF presence alone is not.

@@ -45,7 +45,7 @@ def make_app_config(tmp_path: Path, **overrides) -> AppConfig:
             temperature=0.2,
             retry_attempts=3,
             allow_local_paper_note_fallback=True,
-            prompt_debug_file=tmp_path / "archive" / "paper_summariser" / "prompt.txt",
+            prompt_debug_file=tmp_path / "tmp" / "paper_summariser" / "prompt.txt",
             download_timeout_seconds=120,
             max_pdf_size_mb=100,
             marker_timeout_seconds=300,

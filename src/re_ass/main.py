@@ -61,4 +61,4 @@ def cli(argv: list[str] | None = None) -> int:
 
     from re_ass.pipeline import run
 
-    return run(config, args.date)
+    return run(config, args.date, backfill=args.date is not None)

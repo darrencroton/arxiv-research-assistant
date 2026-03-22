@@ -205,7 +205,7 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
         allow_local_paper_note_fallback=bool(llm_data.get("allow_local_paper_note_fallback", True)),
         prompt_debug_file=_resolve_path(
             root,
-            str(llm_data.get("prompt_debug_file", "archive/paper_summariser/prompt.txt")),
+            str(llm_data.get("prompt_debug_file", "tmp/paper_summariser/prompt.txt")),
         ),
         download_timeout_seconds=int(llm_data.get("download_timeout_seconds", 120)),
         max_pdf_size_mb=int(llm_data.get("max_pdf_size_mb", 100)),

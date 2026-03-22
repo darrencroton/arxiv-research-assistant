@@ -30,8 +30,6 @@ def _determine_window_end(target_date: date, *, explicit_date: bool) -> datetime
 
 def _replace_file(source_path: Path, destination_path: Path) -> None:
     destination_path.parent.mkdir(parents=True, exist_ok=True)
-    if destination_path.exists():
-        destination_path.unlink()
     source_path.replace(destination_path)
 
 
@@ -82,7 +80,7 @@ def _save_failure_record(
     )
 
 
-def run(config: AppConfig, run_date: date | None = None) -> int:
+def run(config: AppConfig, run_date: date | None = None, *, backfill: bool = False) -> int:
     """Execute the full workflow and return an exit code."""
     target_date = run_date or date.today()
     run_summary = _run_summary_base(target_date)
@@ -92,7 +90,13 @@ def run(config: AppConfig, run_date: date | None = None) -> int:
 
     try:
         _bootstrap_runtime(config, note_manager, state_store)
-        note_manager.rotate_weekly_note_if_needed(target_date)
+        if backfill:
+            LOGGER.info(
+                "Explicit backfill for %s: leaving the current weekly summary unchanged.",
+                target_date.isoformat(),
+            )
+        else:
+            note_manager.rotate_weekly_note_if_needed(target_date)
 
         preferences = load_preferences(config.preferences_file, config.default_categories)
         fetcher = ArxivFetcher(
@@ -201,12 +205,13 @@ def run(config: AppConfig, run_date: date | None = None) -> int:
             note_manager.update_daily_note(target_date, successful_papers[0])
             run_summary["daily_note_updated"] = True
 
-            existing_synthesis = note_manager.read_weekly_synthesis()
-            synthesis = generation_service.generate_weekly_synthesis(existing_synthesis, successful_papers)
-            note_manager.update_weekly_note(target_date, successful_papers, synthesis)
-            run_summary["weekly_note_updated"] = True
+            if not backfill:
+                existing_synthesis = note_manager.read_weekly_synthesis()
+                synthesis = generation_service.generate_weekly_synthesis(existing_synthesis, successful_papers)
+                note_manager.update_weekly_note(target_date, successful_papers, synthesis)
+                run_summary["weekly_note_updated"] = True
         else:
-            LOGGER.info("No papers completed successfully; daily and weekly notes were left unchanged.")
+            LOGGER.info("No papers completed successfully; daily and weekly summaries were left unchanged.")
 
         for processed_paper in successful_papers:
             identity = derive_identity(processed_paper.paper)

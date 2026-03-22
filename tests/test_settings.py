@@ -45,6 +45,7 @@ def test_load_config_uses_new_runtime_sections() -> None:
     assert config.logs_root == Path("/tmp/re-ass-test/logs").resolve()
     assert config.daily_template == Path("/tmp/re-ass-test/templates/daily-note-template.md").resolve()
     assert config.weekly_template == Path("/tmp/re-ass-test/templates/weekly-note-template.md").resolve()
+    assert config.llm.prompt_debug_file == Path("/tmp/re-ass-test/tmp/paper_summariser/prompt.txt").resolve()
 
 
 def test_load_config_supports_markdown_links_and_rotation_day(tmp_path: Path) -> None:

@@ -12,8 +12,8 @@ Install `uv` and make sure it is on `PATH`.
 
 - reads ranked interests from `preferences.md`
 - fetches recent arXiv papers and ranks them against those interests
-- generates paper notes under `output/papers/`
-- updates daily and weekly notes under `output/daily/` and `output/weekly/`
+- generates paper summaries under `output/papers/`
+- updates daily and weekly summaries under `output/daily/` and `output/weekly/`
 - retains processed PDFs under `processed/`
 - records explicit machine state under `state/`
 - writes local run logs under `logs/`
@@ -47,13 +47,15 @@ Backfill a specific day:
 uv run re-ass --date 2026-03-21
 ```
 
+Explicit `--date` backfills write the paper summaries and that day's daily summary, but leave the current weekly summary unchanged.
+
 ## Runtime Layout
 
 ```text
 output/
-  papers/      generated paper notes
-  daily/       daily notes
-  weekly/      current weekly note plus weekly archives
+  papers/      generated paper summaries
+  daily/       daily summaries
+  weekly/      current weekly summary plus weekly archives
 processed/     retained PDFs for completed papers
 state/
   papers/      per-paper JSON records
@@ -74,7 +76,7 @@ preferences.md
 
 The output layer is generic Markdown, but Obsidian is still the main expected consumer.
 
-- Symlink `output/papers/`, `output/daily/`, or `output/weekly/` into your vault if you want the generated notes to appear there directly.
+- Symlink `output/papers/`, `output/daily/`, or `output/weekly/` into your vault if you want the generated summaries to appear there directly.
 - Point `[templates]` in `re_ass.toml` at template files inside your vault, or symlink `templates/*.md` to your Obsidian template files.
 - `notes.link_style` defaults to `wikilink`. Set it to `markdown` if you want relative Markdown links instead.
 
@@ -87,7 +89,7 @@ Main config lives in `re_ass.toml`.
 - `tmp/` is used for local scratch/debug output and is never committed.
 - `[templates]` points at the daily and weekly template files.
 - `[preferences]` points at `preferences.md`.
-- `[notes]` controls link style, weekly note filename, weekly rotation day, and archive naming.
+- `[notes]` controls link style, weekly summary filename, weekly rotation day, and archive naming.
 - `[llm]` controls summarisation and synthesis generation.
 
 Supported providers:
@@ -95,11 +97,11 @@ Supported providers:
 - CLI: `claude`, `codex`, `gemini`, `copilot`
 - API: `claude`, `openai`, `gemini`, `perplexity`, `ollama`
 
-`llm.enabled = false` by default. When disabled, `re-ass` still produces fallback note content, micro-summaries, and weekly synthesis deterministically.
+`llm.enabled = false` by default. When disabled, `re-ass` still produces deterministic fallback paper summaries, micro-summaries, and weekly synthesis.
 
 ## Templates
 
-The app edits notes only inside managed markers.
+The app edits summary files only inside managed markers.
 
 - Daily template marker: `re-ass:daily-top-paper`
 - Weekly template markers: `re-ass:weekly-synthesis`, `re-ass:weekly-daily-additions`
