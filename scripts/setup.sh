@@ -25,12 +25,22 @@ mkdir -p \
   tmp/launchd
 
 uv run python - <<'PY'
+import sys
+
 from re_ass.generation_service import GenerationService
 from re_ass.settings import load_config
 
 config = load_config()
-GenerationService(config=config.llm)
-print(f"Validated LLM provider: {config.llm.mode}/{config.llm.provider}")
+try:
+    GenerationService(config=config.llm)
+except Exception as error:
+    print(
+        f"LLM provider validation failed for {config.llm.mode}/{config.llm.provider}: {error}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+print(f"Validated LLM provider prerequisites: {config.llm.mode}/{config.llm.provider}")
 PY
 
 printf 'Setup complete.\n'

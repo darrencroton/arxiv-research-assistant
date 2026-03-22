@@ -33,9 +33,19 @@ That script:
 - installs project dependencies with `uv`
 - creates the local runtime directories used by the app
 - creates `tmp/` for local scratch output such as prompt-debug files and rendered launchd assets
-- validates that the configured LLM provider is usable on this machine
+- validates the configured LLM provider prerequisites on this machine
+- fails early if the configured CLI provider is installed but not authenticated or otherwise not ready for non-interactive use
 
-Before running setup, choose a working provider in `re_ass.toml` and make sure its prerequisites are available. The default config expects the `codex` CLI on `PATH`. If you switch to an API provider, set the required API key first.
+Before running setup, choose a working provider in `re_ass.toml` and make sure its prerequisites are available. The default config expects the `claude` CLI on `PATH` and already authenticated.
+
+CLI provider auth/setup requirements:
+
+- `claude`: run `claude auth login` first. If your Claude plan supports it, `claude setup-token` may also work for long-lived non-interactive auth.
+- `codex`: run `codex login`, or save an API-key login with `printenv OPENAI_API_KEY | codex login --with-api-key`.
+- `copilot`: run `copilot login`, or set `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, or `GITHUB_TOKEN`.
+- `gemini`: for `re-ass`, use `GEMINI_API_KEY`, or Vertex AI credentials (`GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_CLOUD_PROJECT`, and `GOOGLE_CLOUD_LOCATION`). Do not rely on interactive Google OAuth for this app.
+
+If you switch to an API provider, set the required API key first.
 
 ## Run
 
@@ -118,6 +128,12 @@ Supported providers:
 - API: `claude`, `openai`, `gemini`, `perplexity`, `ollama`
 
 `re-ass` requires a working configured provider. If the configured CLI binary or API credentials are missing, setup and runtime fail fast instead of writing degraded fallback paper notes.
+
+CLI auth notes:
+
+- `claude` and `codex` are preflighted with their built-in auth-status commands during setup and app startup.
+- `copilot` uses best-effort readiness checks: token environment variables, `gh auth status`, and local credential-store probes.
+- `gemini` is treated as an automation provider only when API-key or Vertex AI credentials are configured.
 
 ## Templates
 

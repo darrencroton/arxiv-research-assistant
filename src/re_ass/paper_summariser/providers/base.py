@@ -49,3 +49,7 @@ class Provider:
     def supports_direct_pdf(self):
         """Return whether this provider can process PDFs directly without text extraction."""
         return False
+
+    def validate_runtime_ready(self):
+        """Fail fast when a provider cannot run in the current environment."""
+        return None

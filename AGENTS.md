@@ -39,6 +39,8 @@
 - Paper identity is stable and arXiv-derived; do not fall back to title-based duplicate suppression.
 - `preferences.md` defaults to 3 saved papers; users may request 1-10 papers there, capped by `re_ass.toml` `[arxiv].max_papers`.
 - Candidate pools of 50 or fewer should be sent wholesale to the final selector without retrieval truncation.
+- `scripts/setup.sh` and `GenerationService` should fail early when the configured CLI provider is present but not authenticated for non-interactive use.
+- Gemini CLI support in this repo is for API-key or Vertex-AI-backed automation credentials, not piggybacked interactive OAuth.
 - Daily and weekly summary updates must stay inside managed markers.
 - Explicit `--date` backfills must not rotate or rewrite the current weekly summary.
 - `state/papers/*.json` is the authoritative completion record; note or PDF presence alone is not.

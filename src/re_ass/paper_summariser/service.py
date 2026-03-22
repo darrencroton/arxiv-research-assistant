@@ -472,6 +472,9 @@ def _is_retryable_llm_error(error: Exception) -> bool:
         "authentication",
         "logged out",
         "login required",
+        "not logged in",
+        "not authenticated",
+        "no authentication information found",
         "not found on path",
     )
     return not any(marker in message for marker in non_retryable_markers)

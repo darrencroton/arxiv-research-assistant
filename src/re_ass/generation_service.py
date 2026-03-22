@@ -34,12 +34,18 @@ class GenerationService:
     ) -> None:
         self.config = config
         self.provider = provider or create_provider(
-                self.config.mode,
-                self.config.provider,
-                config=self.config.provider_config(),
+            self.config.mode,
+            self.config.provider,
+            config=self.config.provider_config(),
         )
+        readiness_validator = getattr(self.provider, "validate_runtime_ready", None)
+        if callable(readiness_validator):
+            readiness_validator()
 
-        self.paper_summariser = paper_summariser or PaperSummariser(provider=self.provider, config=self.config)
+        self.paper_summariser = paper_summariser or PaperSummariser(
+            provider=self.provider,
+            config=self.config,
+        )
 
     def generate_micro_summary(self, paper: ArxivPaper) -> str:
         """Generate a 1-2 sentence micro-summary from title and abstract."""
