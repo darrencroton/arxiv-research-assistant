@@ -2,6 +2,8 @@
 
 ## Categories
 - astro-ph.CO
+- astro-ph.GA
+- astro-ph.HE
 
 ## Priorities
 1. Little red dots

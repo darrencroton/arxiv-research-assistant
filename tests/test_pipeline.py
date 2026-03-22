@@ -11,20 +11,25 @@ from tests.support import make_app_config, make_paper
 
 def _build_selection(candidates, *, selected=None):
     selected = list(selected or candidates)
-    shortlist = []
+    retrieval_pool = []
     reranked = []
+    final_selected = []
 
     for offset, paper in enumerate(candidates):
         identity = derive_identity(paper)
-        shortlist.append(
+        retrieval_pool.append(
             SimpleNamespace(
                 paper=paper,
                 paper_key=identity.paper_key,
                 source_id=identity.source_id,
-                pre_rank_score=100 - offset,
+                lexical_score=max(0.0, 1.0 - offset * 0.1),
+                semantic_score=max(0.0, 0.9 - offset * 0.1),
+                fused_score=max(0.0, 0.95 - offset * 0.1),
                 best_priority_index=offset,
                 matched_priority_count=max(1, len(candidates) - offset),
                 matched_priorities=("Agents",),
+                retrieval_channels=("lexical", "semantic"),
+                retrieval_notes=("fixture",),
             )
         )
         reranked.append(
@@ -32,20 +37,41 @@ def _build_selection(candidates, *, selected=None):
                 paper=paper,
                 paper_key=identity.paper_key,
                 source_id=identity.source_id,
-                pre_rank_score=100 - offset,
+                lexical_score=max(0.0, 1.0 - offset * 0.1),
+                semantic_score=max(0.0, 0.9 - offset * 0.1),
+                fused_score=max(0.0, 0.95 - offset * 0.1),
                 rerank_score=float(100 - offset),
                 rationale=f"Reason for {paper.title}",
                 best_priority_index=offset,
                 matched_priority_count=max(1, len(candidates) - offset),
                 matched_priorities=("Agents",),
+                retrieval_channels=("lexical", "semantic"),
+                retrieval_notes=("fixture",),
+            )
+        )
+
+    for offset, paper in enumerate(selected):
+        identity = derive_identity(paper)
+        final_selected.append(
+            SimpleNamespace(
+                paper=paper,
+                paper_key=identity.paper_key,
+                source_id=identity.source_id,
+                selection_score=float(98 - offset),
+                rerank_score=float(100 - offset),
+                rationale=f"Selected {paper.title}",
             )
         )
 
     return SimpleNamespace(
         selected_papers=selected,
         candidate_count=len(candidates),
-        shortlist=shortlist,
+        retrieval_pool=retrieval_pool,
         reranked=reranked,
+        selected=final_selected,
+        final_pool=reranked,
+        used_passthrough=False,
+        shortlist=retrieval_pool,
     )
 
 
@@ -100,8 +126,12 @@ class FakeRanker:
         return SimpleNamespace(
             selected_papers=list(selection.selected_papers)[:max_papers],
             candidate_count=selection.candidate_count,
-            shortlist=selection.shortlist,
+            retrieval_pool=selection.retrieval_pool,
             reranked=selection.reranked,
+            selected=selection.selected[:max_papers],
+            final_pool=selection.final_pool,
+            used_passthrough=getattr(selection, "used_passthrough", False),
+            shortlist=selection.retrieval_pool,
         )
 
 
@@ -274,5 +304,8 @@ def test_pipeline_records_interval_and_ranking_diagnostics(tmp_path: Path, monke
     assert '"interval_start"' in summary_text
     assert '"interval_end"' in summary_text
     assert '"candidate_count": 2' in summary_text
+    assert '"retrieval_pool_size": 2' in summary_text
     assert '"shortlist_size": 2' in summary_text
+    assert '"final_pool_size": 2' in summary_text
     assert '"ranking_results"' in summary_text
+    assert '"final_selection"' in summary_text

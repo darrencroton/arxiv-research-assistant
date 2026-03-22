@@ -33,6 +33,9 @@ def make_app_config(tmp_path: Path, **overrides) -> AppConfig:
         max_papers=3,
         arxiv_page_size=50,
         ranking_shortlist_size=24,
+        ranking_final_pool_size=24,
+        ranking_min_selection_score=75.0,
+        ranking_passthrough_candidate_count=50,
         default_categories=("astro-ph.CO",),
         llm=LlmConfig(
             mode="cli",

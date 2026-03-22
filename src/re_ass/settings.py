@@ -90,6 +90,9 @@ class AppConfig:
     max_papers: int
     arxiv_page_size: int
     ranking_shortlist_size: int
+    ranking_final_pool_size: int
+    ranking_min_selection_score: float
+    ranking_passthrough_candidate_count: int
     default_categories: tuple[str, ...]
 
     # llm
@@ -180,9 +183,13 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
     archive_name_pattern = str(notes_data.get("archive_name_pattern", "{date}-weekly-arxiv.md"))
 
     # Arxiv
-    default_categories = tuple(str(cat) for cat in arxiv_data.get("default_categories", ["astro-ph.CO"]))
+    default_categories = tuple(str(cat) for cat in arxiv_data.get("default_categories", ["astro-ph.CO", "astro-ph.GA", "astro-ph.HE"]))
     if not default_categories:
         raise ValueError("arxiv.default_categories must contain at least one category.")
+    ranking_shortlist_size = int(arxiv_data.get("retrieval_pool_size", arxiv_data.get("shortlist_size", 24)))
+    ranking_final_pool_size = int(arxiv_data.get("final_pool_size", min(24, ranking_shortlist_size)))
+    ranking_min_selection_score = float(arxiv_data.get("min_selection_score", 75.0))
+    ranking_passthrough_candidate_count = int(arxiv_data.get("passthrough_candidate_count", 50))
 
     # LLM
     mode = str(llm_data.get("mode", "cli")).strip().lower()
@@ -230,7 +237,10 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
         archive_name_pattern=archive_name_pattern,
         max_papers=int(arxiv_data.get("max_papers", 3)),
         arxiv_page_size=int(arxiv_data.get("page_size", arxiv_data.get("max_results", 100))),
-        ranking_shortlist_size=int(arxiv_data.get("shortlist_size", 24)),
+        ranking_shortlist_size=ranking_shortlist_size,
+        ranking_final_pool_size=ranking_final_pool_size,
+        ranking_min_selection_score=ranking_min_selection_score,
+        ranking_passthrough_candidate_count=ranking_passthrough_candidate_count,
         default_categories=default_categories,
         llm=llm,
     )

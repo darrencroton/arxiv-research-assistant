@@ -50,17 +50,21 @@ def _determine_interval(
     return day_start, now_utc
 
 
-def _paper_summary(selection) -> list[dict[str, object]]:
+def _rerank_summary(selection) -> list[dict[str, object]]:
     return [
         {
             "paper_key": item.paper_key,
             "source_id": item.source_id,
             "title": item.paper.title,
             "published": item.paper.published.isoformat(),
-            "pre_rank_score": item.pre_rank_score,
+            "lexical_score": item.lexical_score,
+            "semantic_score": item.semantic_score,
+            "fused_score": item.fused_score,
             "best_priority_index": item.best_priority_index,
             "matched_priority_count": item.matched_priority_count,
             "matched_priorities": list(item.matched_priorities),
+            "retrieval_channels": list(item.retrieval_channels),
+            "retrieval_notes": list(item.retrieval_notes),
             "rerank_score": item.rerank_score,
             "rationale": item.rationale,
         }
@@ -68,19 +72,23 @@ def _paper_summary(selection) -> list[dict[str, object]]:
     ]
 
 
-def _shortlist_summary(selection) -> list[dict[str, object]]:
+def _retrieval_summary(selection) -> list[dict[str, object]]:
     return [
         {
             "paper_key": item.paper_key,
             "source_id": item.source_id,
             "title": item.paper.title,
             "published": item.paper.published.isoformat(),
-            "pre_rank_score": item.pre_rank_score,
+            "lexical_score": item.lexical_score,
+            "semantic_score": item.semantic_score,
+            "fused_score": item.fused_score,
             "best_priority_index": item.best_priority_index,
             "matched_priority_count": item.matched_priority_count,
             "matched_priorities": list(item.matched_priorities),
+            "retrieval_channels": list(item.retrieval_channels),
+            "retrieval_notes": list(item.retrieval_notes),
         }
-        for item in selection.shortlist
+        for item in selection.retrieval_pool
     ]
 
 
@@ -90,6 +98,20 @@ def _selected_identity_summary(papers) -> list[str]:
 
 def _candidate_identity_summary(papers) -> list[str]:
     return [derive_identity(paper).paper_key for paper in papers]
+
+
+def _final_selection_summary(selection) -> list[dict[str, object]]:
+    return [
+        {
+            "paper_key": item.paper_key,
+            "source_id": item.source_id,
+            "title": item.paper.title,
+            "selection_score": item.selection_score,
+            "rerank_score": item.rerank_score,
+            "rationale": item.rationale,
+        }
+        for item in selection.selected
+    ]
 
 
 def _next_day(target_date: date) -> date:
@@ -121,11 +143,17 @@ def _run_summary_base(target_date: date) -> dict[str, object]:
         "interval_end": None,
         "candidate_count": 0,
         "candidate_keys": [],
+        "retrieval_pool_size": 0,
+        "retrieved_papers": [],
         "shortlist_size": 0,
         "shortlisted_papers": [],
+        "final_pool_size": 0,
+        "final_candidate_keys": [],
         "selected_paper_keys": [],
         "ranking_results": [],
+        "final_selection": [],
         "selected_papers": 0,
+        "used_ranking_passthrough": False,
         "completed_papers": 0,
         "failed_papers": 0,
         "completed_keys": [],
@@ -197,7 +225,10 @@ def run(config: AppConfig, run_date: date | None = None, *, backfill: bool = Fal
         ranker = PaperRanker(
             provider=generation_service.provider,
             config=config.llm,
-            shortlist_size=config.ranking_shortlist_size,
+            retrieval_pool_size=config.ranking_shortlist_size,
+            final_pool_size=config.ranking_final_pool_size,
+            min_selection_score=config.ranking_min_selection_score,
+            passthrough_candidate_count=config.ranking_passthrough_candidate_count,
         )
         selection = ranker.select_top_papers(
             preferences,
@@ -206,11 +237,17 @@ def run(config: AppConfig, run_date: date | None = None, *, backfill: bool = Fal
         )
 
         papers = selection.selected_papers
-        run_summary["shortlist_size"] = len(selection.shortlist)
-        run_summary["shortlisted_papers"] = _shortlist_summary(selection)
+        run_summary["retrieval_pool_size"] = len(selection.retrieval_pool)
+        run_summary["retrieved_papers"] = _retrieval_summary(selection)
+        run_summary["shortlist_size"] = len(selection.retrieval_pool)
+        run_summary["shortlisted_papers"] = _retrieval_summary(selection)
+        run_summary["final_pool_size"] = len(selection.final_pool)
+        run_summary["final_candidate_keys"] = [item.paper_key for item in selection.final_pool]
         run_summary["selected_paper_keys"] = _selected_identity_summary(papers)
-        run_summary["ranking_results"] = _paper_summary(selection)
+        run_summary["ranking_results"] = _rerank_summary(selection)
+        run_summary["final_selection"] = _final_selection_summary(selection)
         run_summary["selected_papers"] = len(papers)
+        run_summary["used_ranking_passthrough"] = selection.used_passthrough
         successful_papers: list[ProcessedPaper] = []
 
         for paper in papers:

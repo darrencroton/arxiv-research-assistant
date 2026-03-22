@@ -33,8 +33,11 @@ archive_name_pattern = "{date}-weekly-arxiv.md"
 [arxiv]
 max_papers = 3
 page_size = 100
-shortlist_size = 24
-default_categories = ["astro-ph.CO"]
+retrieval_pool_size = 96
+final_pool_size = 24
+min_selection_score = 80
+passthrough_candidate_count = 50
+default_categories = ["astro-ph.CO", "astro-ph.GA", "astro-ph.HE"]
 
 [llm]
 mode = "cli"
