@@ -1,6 +1,6 @@
 # research-assistant
 
-`research-assistant` is a local arXiv workflow that fetches in-range arXiv candidates, reranks them against your preferences with an LLM, and writes upstream-style paper summaries plus daily and weekly notes.
+`research-assistant` is a local arXiv workflow that fetches in-range arXiv candidates, ranks them against your preferences, and writes upstream-style paper summaries plus daily and weekly notes.
 
 The Python package and CLI are still named `re-ass`.
 
@@ -12,7 +12,8 @@ Install `uv` and make sure it is on `PATH`.
 
 - reads ranked interests from `preferences.md`
 - fetches all in-range arXiv candidates for the configured categories
-- pre-ranks the full candidate set, then LLM-reranks a shortlist to choose the top papers
+- for small candidate pools, sends the full metadata set directly to the final selector
+- for larger candidate pools, uses hybrid retrieval, local reranking, and a final LLM selection stage
 - generates paper summaries under `output/papers/` using the vendored summariser output directly
 - updates daily and weekly summaries under `output/daily/` and `output/weekly/`
 - retains processed PDFs under `processed/`
@@ -43,7 +44,7 @@ uv run re-ass   # to run the research assistant with defaults
 uv run pytest   # to run the test suite (debugging and verification)
 ```
 
-Edit `preferences.md` before your first real run so ranking uses your own categories and priorities.
+Edit `preferences.md` before your first real run so ranking uses your own categories, priorities, and optional output settings.
 
 Backfill a specific day:
 
@@ -94,8 +95,22 @@ Main config lives in `re_ass.toml`.
 - `[templates]` points at the daily and weekly template files.
 - `[preferences]` points at `preferences.md`.
 - `[notes]` controls link style, weekly summary filename, weekly rotation day, and archive naming.
-- `[arxiv]` controls the number of selected papers, arXiv page size, shortlist size, and default categories.
+- `[arxiv]` controls the hard maximum number of selected papers, arXiv page size, retrieval/rerank pool sizes, selection thresholds, and default categories.
 - `[llm]` controls the mandatory provider used for reranking, paper summaries, and weekly synthesis.
+
+`preferences.md` can optionally include:
+
+```markdown
+## Output
+- Top papers: 5
+```
+
+If omitted, the app saves 3 papers by default. Preference values must be between 1 and 10 and are still capped by `[arxiv].max_papers`.
+
+Current default ranking behavior:
+
+- if a run produces 50 or fewer candidates, the full metadata set is sent to the final selector without retrieval truncation
+- if a run produces more than 50 candidates, the app uses lexical retrieval, alias-aware semantic retrieval, reciprocal-rank fusion, local reranking, and then bounded final selection
 
 Supported providers:
 
@@ -116,7 +131,7 @@ Content outside those markers is preserved untouched.
 ## State And Logs
 
 - `state/papers/*.json` is the authoritative duplicate-suppression record.
-- `state/runs/*.json` stores per-run summaries, including interval bounds, candidate counts, shortlist diagnostics, rerank scores, and selected paper IDs.
+- `state/runs/*.json` stores per-run summaries, including interval bounds, candidate counts, retrieval diagnostics, rerank scores, final-selection rationales, and selected paper IDs.
 - `logs/history.log` is append-only.
 - `logs/last-run.log` is replaced on every run.
 - `tmp/paper_summariser/prompt.txt` stores the latest summariser prompt-debug artifact.

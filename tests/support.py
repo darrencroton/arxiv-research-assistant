@@ -30,7 +30,7 @@ def make_app_config(tmp_path: Path, **overrides) -> AppConfig:
         weekly_note_file="this-weeks-arxiv-papers.md",
         rotation_day="monday",
         archive_name_pattern="{date}-weekly-arxiv.md",
-        max_papers=3,
+        max_papers=10,
         arxiv_page_size=50,
         ranking_shortlist_size=24,
         ranking_final_pool_size=24,

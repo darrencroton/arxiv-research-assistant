@@ -31,7 +31,7 @@ rotation_day = "monday"
 archive_name_pattern = "{date}-weekly-arxiv.md"
 
 [arxiv]
-max_papers = 3
+max_papers = 10
 page_size = 100
 retrieval_pool_size = 96
 final_pool_size = 24

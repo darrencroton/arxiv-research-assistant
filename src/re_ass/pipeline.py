@@ -100,6 +100,11 @@ def _candidate_identity_summary(papers) -> list[str]:
     return [derive_identity(paper).paper_key for paper in papers]
 
 
+def _requested_paper_count(preferences, config: AppConfig) -> int:
+    requested = getattr(preferences, "top_papers", 3)
+    return max(1, min(int(requested), config.max_papers))
+
+
 def _final_selection_summary(selection) -> list[dict[str, object]]:
     return [
         {
@@ -154,6 +159,7 @@ def _run_summary_base(target_date: date) -> dict[str, object]:
         "final_selection": [],
         "selected_papers": 0,
         "used_ranking_passthrough": False,
+        "requested_paper_count": 0,
         "completed_papers": 0,
         "failed_papers": 0,
         "completed_keys": [],
@@ -203,6 +209,7 @@ def run(config: AppConfig, run_date: date | None = None, *, backfill: bool = Fal
             note_manager.rotate_weekly_note_if_needed(target_date)
 
         preferences = load_preferences(config.preferences_file, config.default_categories)
+        requested_paper_count = _requested_paper_count(preferences, config)
         generation_service = GenerationService(config=config.llm)
         interval_start, interval_end = _determine_interval(
             target_date,
@@ -233,10 +240,11 @@ def run(config: AppConfig, run_date: date | None = None, *, backfill: bool = Fal
         selection = ranker.select_top_papers(
             preferences,
             candidates,
-            max_papers=config.max_papers,
+            max_papers=requested_paper_count,
         )
 
         papers = selection.selected_papers
+        run_summary["requested_paper_count"] = requested_paper_count
         run_summary["retrieval_pool_size"] = len(selection.retrieval_pool)
         run_summary["retrieved_papers"] = _retrieval_summary(selection)
         run_summary["shortlist_size"] = len(selection.retrieval_pool)

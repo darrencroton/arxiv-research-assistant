@@ -14,6 +14,7 @@ class PreferenceConfig:
     priorities: tuple[str, ...]
     categories: tuple[str, ...]
     raw_text: str
+    top_papers: int = 3
 
 
 @dataclass(frozen=True, slots=True)

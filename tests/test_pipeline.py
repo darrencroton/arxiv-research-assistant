@@ -118,10 +118,13 @@ class FakeGenerationService:
 
 
 class FakeRanker:
+    last_max_papers = None
+
     def __init__(self, *, selection=None) -> None:
         self.selection = selection
 
     def select_top_papers(self, _preferences, candidates, *, max_papers):
+        FakeRanker.last_max_papers = max_papers
         selection = self.selection or _build_selection(candidates, selected=candidates[:max_papers])
         return SimpleNamespace(
             selected_papers=list(selection.selected_papers)[:max_papers],
@@ -304,8 +307,39 @@ def test_pipeline_records_interval_and_ranking_diagnostics(tmp_path: Path, monke
     assert '"interval_start"' in summary_text
     assert '"interval_end"' in summary_text
     assert '"candidate_count": 2' in summary_text
+    assert '"requested_paper_count": 3' in summary_text
     assert '"retrieval_pool_size": 2' in summary_text
     assert '"shortlist_size": 2' in summary_text
     assert '"final_pool_size": 2' in summary_text
     assert '"ranking_results"' in summary_text
     assert '"final_selection"' in summary_text
+
+
+def test_pipeline_uses_top_papers_preference_up_to_configured_cap(tmp_path: Path, monkeypatch) -> None:
+    config = make_app_config(tmp_path, max_papers=10)
+    papers = [make_paper(arxiv_id=f"2603.30{index:03d}", title=f"Paper {index}") for index in range(1, 7)]
+    preferences = SimpleNamespace(top_papers=5)
+    monkeypatch.setattr("re_ass.pipeline.ArxivFetcher", lambda **_kwargs: FakeFetcher(papers))
+    monkeypatch.setattr("re_ass.pipeline.PaperRanker", lambda **_kwargs: FakeRanker())
+    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: preferences)
+    monkeypatch.setattr("re_ass.pipeline.GenerationService", lambda **_kwargs: FakeGenerationService())
+
+    exit_code = run(config, date(2026, 3, 29))
+
+    assert exit_code == 0
+    assert FakeRanker.last_max_papers == 5
+
+
+def test_pipeline_clamps_top_papers_preference_to_configured_cap(tmp_path: Path, monkeypatch) -> None:
+    config = make_app_config(tmp_path, max_papers=4)
+    papers = [make_paper(arxiv_id=f"2603.31{index:03d}", title=f"Paper {index}") for index in range(1, 7)]
+    preferences = SimpleNamespace(top_papers=8)
+    monkeypatch.setattr("re_ass.pipeline.ArxivFetcher", lambda **_kwargs: FakeFetcher(papers))
+    monkeypatch.setattr("re_ass.pipeline.PaperRanker", lambda **_kwargs: FakeRanker())
+    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: preferences)
+    monkeypatch.setattr("re_ass.pipeline.GenerationService", lambda **_kwargs: FakeGenerationService())
+
+    exit_code = run(config, date(2026, 3, 30))
+
+    assert exit_code == 0
+    assert FakeRanker.last_max_papers == 4
