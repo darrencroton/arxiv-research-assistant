@@ -1,6 +1,6 @@
 # ArXiv Research Assistant (`re-ass`)
 
-`re-ass` is a local arXiv discovery tool for researchers. It fetches recent papers from the arXiv categories you care about, ranks them against your research priorities, and writes high quality Markdown summaries for the top ranked, direct to your Obsidian daily/weekly notes (or wherever you keep your research).
+`re-ass` is a local arXiv discovery tool for researchers. It automatically fetches recent papers from selected arXiv categories, ranks them against your research priorities, and writes high quality Markdown summaries for the top ranked, direct to your Obsidian daily/weekly notes (or wherever you keep your research).
 
 It uses the same core engine as [Science Paper Summariser](https://github.com/darrencroton/science-paper-summariser) to produce formatted paper summaries with a glossary, tags, and full citations back to the original paper (to ensure quality).
 
@@ -69,7 +69,7 @@ model = "claude-sonnet-4.6"
 effort = "high"
 ```
 
-If you do not already have a Claude, Codex, or Gemini subscription, researchers and educators with an `.edu` email address may be eligible for [GitHub Education](https://github.com/education), which opens up higher-quality Copilot models through the GitHub CLI.
+If you do not already have a Claude, Codex, or Gemini subscription, researchers and educators with an `.edu` email address may be eligible for [GitHub Education](https://github.com/education), which opens up higher-quality Copilot models through the GitHub Copilot CLI.
 
 For scheduled automation, your chosen provider must already be authenticated for non-interactive use.
 
@@ -194,7 +194,7 @@ Only install automation after a manual run succeeds. For setup, schedule customi
 
 ## Customisation
 
-- For different research fielda, update `user_preferences/preferences.md` so `## Categories` fetches the right arXiv feeds, and your priorities so you best match the papers there that you are most interested in. You should probably also update the generated science-area tags to use a different vocabulary; see `src/re_ass/paper_summariser/project_knowledge/keywords.txt`.
+- For different research fields, update `user_preferences/preferences.md` so `## Categories` fetches the right arXiv feeds, then your priorities to best match the papers you are most interested in. You should probably also update the generated science-area tags to use a different vocabulary; see `src/re_ass/paper_summariser/project_knowledge/keywords.txt`.
 - To change the structure of each paper summary, edit `src/re_ass/paper_summariser/project_knowledge/paper-summary-template.md`. To change the summariser instructions themselves, edit `src/re_ass/paper_summariser/project_knowledge/system-prompt.md` and `src/re_ass/paper_summariser/project_knowledge/user-prompt.md`, which may be needed if you alter the paper summary template structure.
 
 ## Troubleshooting
