@@ -69,7 +69,7 @@ model = "claude-sonnet-4.6"
 effort = "high"
 ```
 
-If you do not already have a Claude, Codex, or Gemini subscription, researchers and educators with an `.edu` email address may be eligible for [GitHub Education](https://github.com/education). Depending on the current offer, that can provide access to higher-capability Copilot models through the GitHub CLI.
+If you do not already have a Claude, Codex, or Gemini subscription, researchers and educators with an `.edu` email address may be eligible for [GitHub Education](https://github.com/education), which opens up higher-quality Copilot models through the GitHub CLI.
 
 For scheduled automation, your chosen provider must already be authenticated for non-interactive use.
 
@@ -194,7 +194,7 @@ Only install automation after a manual run succeeds. For setup, schedule customi
 
 ## Customisation
 
-- For different research fielda, update `user_preferences/preferences.md` so `## Categories` fetches the right arXiv feeds, and your priorities so you best match the papers you are most interested in. You should probably also update the generated science-area tags to use a different vocabulary; see `src/re_ass/paper_summariser/project_knowledge/keywords.txt`.
+- For different research fielda, update `user_preferences/preferences.md` so `## Categories` fetches the right arXiv feeds, and your priorities so you best match the papers there that you are most interested in. You should probably also update the generated science-area tags to use a different vocabulary; see `src/re_ass/paper_summariser/project_knowledge/keywords.txt`.
 - To change the structure of each paper summary, edit `src/re_ass/paper_summariser/project_knowledge/paper-summary-template.md`. To change the summariser instructions themselves, edit `src/re_ass/paper_summariser/project_knowledge/system-prompt.md` and `src/re_ass/paper_summariser/project_knowledge/user-prompt.md`, which may be needed if you alter the paper summary template structure.
 
 ## Troubleshooting
