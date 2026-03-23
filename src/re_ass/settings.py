@@ -171,8 +171,8 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
     last_run_log_file = _resolve_path(logs_root, str(logs_data.get("last_run_file", "last-run.log")))
 
     # Templates
-    daily_template = _resolve_path(root, str(templates_data.get("daily_template", "user_preferences/daily-note-template.md")))
-    weekly_template = _resolve_path(root, str(templates_data.get("weekly_template", "user_preferences/weekly-note-template.md")))
+    daily_template = _resolve_path(root, str(templates_data.get("daily_template", "user_preferences/templates/daily-note-template.md")))
+    weekly_template = _resolve_path(root, str(templates_data.get("weekly_template", "user_preferences/templates/weekly-note-template.md")))
 
     # Preferences
     preferences_file = _resolve_path(root, str(preferences_data.get("file", "user_preferences/preferences.md")))

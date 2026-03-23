@@ -54,8 +54,8 @@ def test_load_config_uses_new_runtime_sections() -> None:
     assert config.pdfs_dir == Path("/tmp/re-ass-test/output/pdfs").resolve()
     assert config.state_root == Path("/tmp/re-ass-test/state").resolve()
     assert config.logs_root == Path("/tmp/re-ass-test/logs").resolve()
-    assert config.daily_template == Path("/tmp/re-ass-test/user_preferences/daily-note-template.md").resolve()
-    assert config.weekly_template == Path("/tmp/re-ass-test/user_preferences/weekly-note-template.md").resolve()
+    assert config.daily_template == Path("/tmp/re-ass-test/user_preferences/templates/daily-note-template.md").resolve()
+    assert config.weekly_template == Path("/tmp/re-ass-test/user_preferences/templates/weekly-note-template.md").resolve()
     assert config.preferences_file == Path("/tmp/re-ass-test/user_preferences/preferences.md").resolve()
     assert config.arxiv_page_size == 100
     assert config.ranking_shortlist_size == 24

@@ -38,8 +38,12 @@ Edit these files first:
 
 - `user_preferences/settings.toml`: provider, output paths, note settings
 - `user_preferences/preferences.md`: arXiv categories, topics to prioritise, number of top papers
-- `user_preferences/daily-note-template.md`: daily note layout
-- `user_preferences/weekly-note-template.md`: weekly note layout
+
+Optional template overrides:
+
+- `user_preferences/templates/daily-note-template.md`: default daily note template
+- `user_preferences/templates/weekly-note-template.md`: default weekly note template
+- or point `[templates]` in `user_preferences/settings.toml` at your own template files
 
 Then run:
 
@@ -72,9 +76,8 @@ logs/
 user_preferences/
   settings.toml               your configuration
   preferences.md             your categories and priorities
-  daily-note-template.md     your daily note template
-  weekly-note-template.md    your weekly note template
-  defaults/                  repo defaults used to create your local copies
+  defaults/                  repo default settings and preferences
+  templates/                 built-in daily and weekly templates
 ```
 
 ## Configuration

@@ -18,9 +18,9 @@
 
 - `user_preferences/defaults/settings.toml`: tracked default runtime configuration
 - `user_preferences/defaults/preferences.md`: tracked default ranked preferences and optional `Top papers: X` output preference
-- `user_preferences/defaults/daily-note-template.md`: tracked default daily note template with managed markers
-- `user_preferences/defaults/weekly-note-template.md`: tracked default weekly note template with managed markers
-- `user_preferences/`: gitignored mutable local copies created by setup/bootstrap
+- `user_preferences/templates/daily-note-template.md`: tracked default daily note template with managed markers
+- `user_preferences/templates/weekly-note-template.md`: tracked default weekly note template with managed markers
+- `user_preferences/`: local config plus tracked defaults/templates
 - `scripts/setup.sh`: first-time local bootstrap
 - `scripts/launchd/`: public-safe launchd template and renderer
 - `output/`, `state/`, `logs/`: active runtime directories (`output/summaries`, `output/daily-notes`, `output/weekly-notes`, `output/pdfs`)

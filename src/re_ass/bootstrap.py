@@ -11,8 +11,6 @@ DEFAULTS_DIRNAME = "defaults"
 USER_PREFERENCE_FILENAMES = (
     "settings.toml",
     "preferences.md",
-    "daily-note-template.md",
-    "weekly-note-template.md",
 )
 
 
