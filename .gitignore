@@ -15,3 +15,7 @@ tmp/
 .claude/
 .ai-orchestrator/
 HANDOFF.md
+
+user_preferences/*
+!user_preferences/defaults/
+!user_preferences/defaults/**

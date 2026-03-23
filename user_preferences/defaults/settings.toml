@@ -18,11 +18,11 @@ history_file = "history.log"
 last_run_file = "last-run.log"
 
 [templates]
-daily_template = "templates/daily-note-template.md"
-weekly_template = "templates/weekly-note-template.md"
+daily_template = "user_preferences/daily-note-template.md"
+weekly_template = "user_preferences/weekly-note-template.md"
 
 [preferences]
-file = "preferences.md"
+file = "user_preferences/preferences.md"
 
 [notes]
 link_style = "wikilink"

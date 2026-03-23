@@ -1,8 +1,6 @@
-# research-assistant
+# research-assistant (`re-ass`)
 
 `research-assistant` is a local arXiv workflow that fetches in-range arXiv candidates, ranks them against your preferences, and writes upstream-style paper summaries plus daily and weekly notes.
-
-The Python package and CLI are still named `re-ass`.
 
 ## Prerequisite
 
@@ -10,7 +8,7 @@ Install `uv` and make sure it is on `PATH`.
 
 ## What It Does
 
-- reads ranked interests from `preferences.md`
+- reads ranked interests from `user_preferences/preferences.md`
 - fetches all in-range arXiv candidates for the configured categories
 - for small candidate pools, sends the full metadata set directly to the final selector
 - for larger candidate pools, uses hybrid retrieval, local reranking, and a final LLM selection stage
@@ -36,7 +34,7 @@ That script:
 - validates the configured LLM provider prerequisites on this machine
 - fails early if the configured CLI provider is installed but not authenticated or otherwise not ready for non-interactive use
 
-Before running setup, choose a working provider in `re_ass.toml` and make sure its prerequisites are available. The default config expects the `claude` CLI on `PATH` and already authenticated.
+Before running setup, choose a working provider in `user_preferences/defaults/settings.toml` if you want to change the tracked defaults, or just let setup bootstrap `user_preferences/settings.toml` and edit the user-local copy afterwards. The default config expects the `claude` CLI on `PATH` and already authenticated.
 
 CLI provider auth/setup requirements:
 
@@ -54,7 +52,7 @@ uv run re-ass   # to run the research assistant with defaults
 uv run pytest   # to run the test suite (debugging and verification)
 ```
 
-Edit `preferences.md` before your first real run so ranking uses your own categories, priorities, and optional output settings.
+Edit `user_preferences/preferences.md` before your first real run so ranking uses your own categories, priorities, and optional output settings.
 
 Backfill a specific day:
 
@@ -81,10 +79,16 @@ logs/
 tmp/
   paper_summariser/
   launchd/
-templates/
-  daily-note-template.md
-  weekly-note-template.md
-preferences.md
+user_preferences/
+  settings.toml               mutable local settings (gitignored)
+  preferences.md             mutable local preferences (gitignored)
+  daily-note-template.md     mutable local daily template (gitignored)
+  weekly-note-template.md    mutable local weekly template (gitignored)
+  defaults/
+    settings.toml
+    preferences.md
+    daily-note-template.md
+    weekly-note-template.md
 ```
 
 ## Obsidian Integration
@@ -92,23 +96,23 @@ preferences.md
 The output layer is generic Markdown, but Obsidian is still the main expected consumer.
 
 - Symlink `output/papers/`, `output/daily/`, or `output/weekly/` into your vault if you want the generated summaries to appear there directly.
-- Point `[templates]` in `re_ass.toml` at template files inside your vault, or symlink `templates/*.md` to your Obsidian template files.
+- Point `[templates]` in `user_preferences/settings.toml` at template files inside your vault, or symlink the files under `user_preferences/` to your Obsidian template files.
 - `notes.link_style` defaults to `wikilink`. Set it to `markdown` if you want relative Markdown links instead.
 
 ## Configuration
 
-Main config lives in `re_ass.toml`.
+Main config lives in `user_preferences/settings.toml`.
 
 - `[output]` controls the user-facing Markdown directories.
 - `[processed]`, `[state]`, and `[logs]` control retained artifacts, machine state, and diagnostics.
 - `tmp/` is used for local scratch/debug output and is never committed.
 - `[templates]` points at the daily and weekly template files.
-- `[preferences]` points at `preferences.md`.
+- `[preferences]` points at `user_preferences/preferences.md`.
 - `[notes]` controls link style, weekly summary filename, weekly rotation day, and archive naming.
 - `[arxiv]` controls the hard maximum number of selected papers, arXiv page size, retrieval/rerank pool sizes, selection thresholds, and default categories.
 - `[llm]` controls the mandatory provider used for reranking, paper summaries, and weekly synthesis.
 
-`preferences.md` can optionally include:
+`user_preferences/preferences.md` can optionally include:
 
 ```markdown
 ## Output

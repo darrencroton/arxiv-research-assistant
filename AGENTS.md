@@ -16,10 +16,11 @@
 
 ## Important Files
 
-- `re_ass.toml`: main runtime configuration
-- `preferences.md`: ranked preferences, arXiv categories, and optional `Top papers: X` output preference
-- `templates/daily-note-template.md`: daily note template with managed markers
-- `templates/weekly-note-template.md`: weekly note template with managed markers
+- `user_preferences/defaults/settings.toml`: tracked default runtime configuration
+- `user_preferences/defaults/preferences.md`: tracked default ranked preferences and optional `Top papers: X` output preference
+- `user_preferences/defaults/daily-note-template.md`: tracked default daily note template with managed markers
+- `user_preferences/defaults/weekly-note-template.md`: tracked default weekly note template with managed markers
+- `user_preferences/`: gitignored mutable local copies created by setup/bootstrap
 - `scripts/setup.sh`: first-time local bootstrap
 - `scripts/launchd/`: public-safe launchd template and renderer
 - `output/`, `processed/`, `state/`, `logs/`: active runtime directories
@@ -37,7 +38,7 @@
 - Store simulation or retained runtime artifacts under `archive/`.
 - Keep the paper-note path upstream-first: adapt at the app boundary instead of rewriting the provider/extraction stack.
 - Paper identity is stable and arXiv-derived; do not fall back to title-based duplicate suppression.
-- `preferences.md` defaults to 3 saved papers; users may request 1-10 papers there, capped by `re_ass.toml` `[arxiv].max_papers`.
+- `user_preferences/preferences.md` defaults to 3 saved papers; users may request 1-10 papers there, capped by `user_preferences/settings.toml` `[arxiv].max_papers`.
 - Candidate pools of 50 or fewer should be sent wholesale to the final selector without retrieval truncation.
 - `scripts/setup.sh` and `GenerationService` should fail early when the configured CLI provider is present but not authenticated for non-interactive use.
 - Gemini CLI support in this repo is for API-key or Vertex-AI-backed automation credentials, not piggybacked interactive OAuth.

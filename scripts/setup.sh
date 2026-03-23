@@ -27,8 +27,13 @@ mkdir -p \
 uv run python - <<'PY'
 import sys
 
+from re_ass.bootstrap import ensure_user_preferences
 from re_ass.generation_service import GenerationService
 from re_ass.settings import load_config
+
+created = ensure_user_preferences()
+for path in created:
+    print(f"Bootstrapped user preference file: {path}")
 
 config = load_config()
 try:

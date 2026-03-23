@@ -21,6 +21,7 @@ dependencies = [
 
 [project.scripts]
 re-ass = "re_ass.main:cli"
+re_ass = "re_ass.main:cli"
 
 [dependency-groups]
 dev = [

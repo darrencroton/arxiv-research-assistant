@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 import tomllib
 
+from re_ass.bootstrap import default_config_path
+
 
 _VALID_LINK_STYLES = ("wikilink", "markdown")
 _VALID_ROTATION_DAYS = (
@@ -50,7 +52,7 @@ class LlmConfig:
 
 @dataclass(frozen=True, slots=True)
 class AppConfig:
-    """Application configuration matching the re_ass.toml schema."""
+    """Application configuration matching the settings.toml schema."""
 
     project_root: Path
 
@@ -110,17 +112,26 @@ def _resolve_path(base_path: Path, raw_path: str) -> Path:
     return (base_path / candidate).resolve()
 
 
+def _config_root(candidate: Path) -> Path:
+    parent = candidate.parent.resolve()
+    if parent.name == "user_preferences":
+        return parent.parent.resolve()
+    if parent.name == "defaults" and parent.parent.name == "user_preferences":
+        return parent.parent.parent.resolve()
+    return parent
+
+
 def load_config(config_path: Path | None = None, project_root: Path | None = None) -> AppConfig:
-    """Load and validate application configuration from re_ass.toml."""
+    """Load and validate application configuration from settings.toml."""
     root = (project_root or _default_project_root()).resolve()
-    candidate = Path(config_path).expanduser().resolve() if config_path else (root / "re_ass.toml").resolve()
+    candidate = Path(config_path).expanduser().resolve() if config_path else default_config_path(root)
     data: dict[str, object] = {}
 
     if candidate.exists():
         with candidate.open("rb") as handle:
             data = tomllib.load(handle)
         if project_root is None:
-            root = candidate.parent.resolve()
+            root = _config_root(candidate)
 
     output_data = data.get("output", {})
     processed_data = data.get("processed", {})
@@ -144,7 +155,7 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
         ("llm", llm_data),
     ]:
         if not isinstance(section, dict):
-            raise ValueError(f"Invalid configuration format for [{name}] in re_ass.toml.")
+            raise ValueError(f"Invalid configuration format for [{name}] in settings.toml.")
 
     # Output paths
     output_root = _resolve_path(root, str(output_data.get("root", "output")))
@@ -166,11 +177,11 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
     last_run_log_file = _resolve_path(logs_root, str(logs_data.get("last_run_file", "last-run.log")))
 
     # Templates
-    daily_template = _resolve_path(root, str(templates_data.get("daily_template", "templates/daily-note-template.md")))
-    weekly_template = _resolve_path(root, str(templates_data.get("weekly_template", "templates/weekly-note-template.md")))
+    daily_template = _resolve_path(root, str(templates_data.get("daily_template", "user_preferences/daily-note-template.md")))
+    weekly_template = _resolve_path(root, str(templates_data.get("weekly_template", "user_preferences/weekly-note-template.md")))
 
     # Preferences
-    preferences_file = _resolve_path(root, str(preferences_data.get("file", "preferences.md")))
+    preferences_file = _resolve_path(root, str(preferences_data.get("file", "user_preferences/preferences.md")))
 
     # Notes
     link_style = str(notes_data.get("link_style", "wikilink")).strip().lower()

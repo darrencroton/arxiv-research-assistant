@@ -7,6 +7,7 @@ from datetime import date
 import logging
 from pathlib import Path
 
+from re_ass.bootstrap import ensure_user_preferences
 from re_ass.settings import AppConfig, load_config
 
 
@@ -20,7 +21,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--config",
         type=Path,
         default=None,
-        help="Optional path to a re_ass TOML configuration file.",
+        help="Optional path to a settings TOML configuration file.",
     )
     parser.add_argument(
         "--date",
@@ -55,6 +56,10 @@ def cli(argv: list[str] | None = None) -> int:
     """Parse arguments, load config, and hand off to the pipeline."""
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.config is None:
+        ensure_user_preferences()
+
     config = load_config(args.config)
 
     configure_logging(config)

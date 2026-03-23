@@ -6,7 +6,7 @@ from re_ass.settings import load_config
 
 
 def test_load_config_parses_explicit_llm_provider_settings(tmp_path: Path) -> None:
-    config_path = tmp_path / "re_ass.toml"
+    config_path = tmp_path / "settings.toml"
     config_path.write_text(
         "[output]\nroot = 'output'\n\n"
         "[arxiv]\n"
@@ -51,8 +51,9 @@ def test_load_config_uses_new_runtime_sections() -> None:
     assert config.processed_root == Path("/tmp/re-ass-test/processed").resolve()
     assert config.state_root == Path("/tmp/re-ass-test/state").resolve()
     assert config.logs_root == Path("/tmp/re-ass-test/logs").resolve()
-    assert config.daily_template == Path("/tmp/re-ass-test/templates/daily-note-template.md").resolve()
-    assert config.weekly_template == Path("/tmp/re-ass-test/templates/weekly-note-template.md").resolve()
+    assert config.daily_template == Path("/tmp/re-ass-test/user_preferences/daily-note-template.md").resolve()
+    assert config.weekly_template == Path("/tmp/re-ass-test/user_preferences/weekly-note-template.md").resolve()
+    assert config.preferences_file == Path("/tmp/re-ass-test/user_preferences/preferences.md").resolve()
     assert config.arxiv_page_size == 100
     assert config.ranking_shortlist_size == 24
     assert config.ranking_final_pool_size == 24
@@ -62,7 +63,7 @@ def test_load_config_uses_new_runtime_sections() -> None:
 
 
 def test_load_config_supports_legacy_arxiv_max_results_key(tmp_path: Path) -> None:
-    config_path = tmp_path / "re_ass.toml"
+    config_path = tmp_path / "settings.toml"
     config_path.write_text(
         "[arxiv]\n"
         "default_categories = ['astro-ph.CO']\n"
@@ -76,7 +77,7 @@ def test_load_config_supports_legacy_arxiv_max_results_key(tmp_path: Path) -> No
 
 
 def test_load_config_supports_legacy_shortlist_size_key(tmp_path: Path) -> None:
-    config_path = tmp_path / "re_ass.toml"
+    config_path = tmp_path / "settings.toml"
     config_path.write_text(
         "[arxiv]\n"
         "default_categories = ['astro-ph.CO']\n"
@@ -90,7 +91,7 @@ def test_load_config_supports_legacy_shortlist_size_key(tmp_path: Path) -> None:
 
 
 def test_load_config_supports_markdown_links_and_rotation_day(tmp_path: Path) -> None:
-    config_path = tmp_path / "re_ass.toml"
+    config_path = tmp_path / "settings.toml"
     config_path.write_text(
         "[notes]\n"
         "link_style = 'markdown'\n"
@@ -106,7 +107,7 @@ def test_load_config_supports_markdown_links_and_rotation_day(tmp_path: Path) ->
 
 
 def test_load_config_rejects_invalid_link_style(tmp_path: Path) -> None:
-    config_path = tmp_path / "re_ass.toml"
+    config_path = tmp_path / "settings.toml"
     config_path.write_text(
         "[notes]\nlink_style = 'html'\n\n"
         "[arxiv]\ndefault_categories = ['astro-ph.CO']\n",
@@ -118,7 +119,7 @@ def test_load_config_rejects_invalid_link_style(tmp_path: Path) -> None:
 
 
 def test_load_config_rejects_invalid_rotation_day(tmp_path: Path) -> None:
-    config_path = tmp_path / "re_ass.toml"
+    config_path = tmp_path / "settings.toml"
     config_path.write_text(
         "[notes]\nrotation_day = 'funday'\n\n"
         "[arxiv]\ndefault_categories = ['astro-ph.CO']\n",
