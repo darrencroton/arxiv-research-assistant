@@ -35,7 +35,7 @@ def test_render_link_supports_wikilink_and_markdown() -> None:
 
     assert render_link(filename_stem, "Example Paper", style="wikilink") == f"[[{filename_stem}|Example Paper]]"
     assert render_link(filename_stem, "Example Paper", style="markdown", from_subdir="daily") == (
-        "[Example Paper](../papers/Doe%20-%202026%20-%20Example%20Paper%20%5BarXiv%202603.20002%5D.md)"
+        "[Example Paper](../summaries/Doe%20-%202026%20-%20Example%20Paper%20%5BarXiv%202603.20002%5D.md)"
     )
 
 

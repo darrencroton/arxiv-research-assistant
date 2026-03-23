@@ -58,12 +58,10 @@ class AppConfig:
 
     # output/
     output_root: Path
-    papers_dir: Path
-    daily_dir: Path
-    weekly_dir: Path
-
-    # processed/
-    processed_root: Path
+    summaries_dir: Path
+    daily_notes_dir: Path
+    weekly_notes_dir: Path
+    pdfs_dir: Path
 
     # state/
     state_root: Path
@@ -134,7 +132,6 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
             root = _config_root(candidate)
 
     output_data = data.get("output", {})
-    processed_data = data.get("processed", {})
     state_data = data.get("state", {})
     logs_data = data.get("logs", {})
     templates_data = data.get("templates", {})
@@ -145,7 +142,6 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
 
     for name, section in [
         ("output", output_data),
-        ("processed", processed_data),
         ("state", state_data),
         ("logs", logs_data),
         ("templates", templates_data),
@@ -159,12 +155,10 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
 
     # Output paths
     output_root = _resolve_path(root, str(output_data.get("root", "output")))
-    papers_dir = _resolve_path(output_root, str(output_data.get("papers_dir", "papers")))
-    daily_dir = _resolve_path(output_root, str(output_data.get("daily_dir", "daily")))
-    weekly_dir = _resolve_path(output_root, str(output_data.get("weekly_dir", "weekly")))
-
-    # Processed
-    processed_root = _resolve_path(root, str(processed_data.get("root", "processed")))
+    summaries_dir = _resolve_path(output_root, str(output_data.get("summaries_dir", "summaries")))
+    daily_notes_dir = _resolve_path(output_root, str(output_data.get("daily_notes_dir", "daily-notes")))
+    weekly_notes_dir = _resolve_path(output_root, str(output_data.get("weekly_notes_dir", "weekly-notes")))
+    pdfs_dir = _resolve_path(output_root, str(output_data.get("pdfs_dir", "pdfs")))
 
     # State paths
     state_root = _resolve_path(root, str(state_data.get("root", "state")))
@@ -229,10 +223,10 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
     return AppConfig(
         project_root=root,
         output_root=output_root,
-        papers_dir=papers_dir,
-        daily_dir=daily_dir,
-        weekly_dir=weekly_dir,
-        processed_root=processed_root,
+        summaries_dir=summaries_dir,
+        daily_notes_dir=daily_notes_dir,
+        weekly_notes_dir=weekly_notes_dir,
+        pdfs_dir=pdfs_dir,
         state_root=state_root,
         state_papers_dir=state_papers_dir,
         state_runs_dir=state_runs_dir,

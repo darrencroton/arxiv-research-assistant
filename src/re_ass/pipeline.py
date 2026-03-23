@@ -135,7 +135,7 @@ def _cleanup_path(path: Path | None) -> None:
 
 def _bootstrap_runtime(config: AppConfig, note_manager: NoteManager, state_store: StateStore) -> None:
     config.output_root.mkdir(parents=True, exist_ok=True)
-    config.processed_root.mkdir(parents=True, exist_ok=True)
+    config.pdfs_dir.mkdir(parents=True, exist_ok=True)
     config.logs_root.mkdir(parents=True, exist_ok=True)
     note_manager.bootstrap()
     state_store.bootstrap()
@@ -303,10 +303,10 @@ def run(config: AppConfig, run_date: date | None = None, *, backfill: bool = Fal
                     staged_note_path = temp_dir / identity.note_filename
                     staged_note_path.write_text(note_content, encoding="utf-8")
 
-                    final_pdf_path = config.processed_root / identity.pdf_filename
+                    final_pdf_path = config.pdfs_dir / identity.pdf_filename
                     _replace_file(staged_pdf_path, final_pdf_path)
 
-                    final_note_path = config.papers_dir / identity.note_filename
+                    final_note_path = config.summaries_dir / identity.note_filename
                     _replace_file(staged_note_path, final_note_path)
 
                     state_store.save_paper_record(

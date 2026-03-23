@@ -48,7 +48,10 @@ def test_load_config_uses_new_runtime_sections() -> None:
     config = load_config(project_root=Path("/tmp/re-ass-test"))
 
     assert config.output_root == Path("/tmp/re-ass-test/output").resolve()
-    assert config.processed_root == Path("/tmp/re-ass-test/processed").resolve()
+    assert config.summaries_dir == Path("/tmp/re-ass-test/output/summaries").resolve()
+    assert config.daily_notes_dir == Path("/tmp/re-ass-test/output/daily-notes").resolve()
+    assert config.weekly_notes_dir == Path("/tmp/re-ass-test/output/weekly-notes").resolve()
+    assert config.pdfs_dir == Path("/tmp/re-ass-test/output/pdfs").resolve()
     assert config.state_root == Path("/tmp/re-ass-test/state").resolve()
     assert config.logs_root == Path("/tmp/re-ass-test/logs").resolve()
     assert config.daily_template == Path("/tmp/re-ass-test/user_preferences/daily-note-template.md").resolve()

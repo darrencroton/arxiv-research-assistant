@@ -102,9 +102,9 @@ class NoteManager:
 
     def bootstrap(self) -> None:
         self.config.output_root.mkdir(parents=True, exist_ok=True)
-        self.config.papers_dir.mkdir(parents=True, exist_ok=True)
-        self.config.daily_dir.mkdir(parents=True, exist_ok=True)
-        self.config.weekly_dir.mkdir(parents=True, exist_ok=True)
+        self.config.summaries_dir.mkdir(parents=True, exist_ok=True)
+        self.config.daily_notes_dir.mkdir(parents=True, exist_ok=True)
+        self.config.weekly_notes_dir.mkdir(parents=True, exist_ok=True)
 
         self.config.daily_template.parent.mkdir(parents=True, exist_ok=True)
         self.config.weekly_template.parent.mkdir(parents=True, exist_ok=True)
@@ -127,7 +127,7 @@ class NoteManager:
 
     @property
     def weekly_note_path(self) -> Path:
-        return self.config.weekly_dir / self.config.weekly_note_file
+        return self.config.weekly_notes_dir / self.config.weekly_note_file
 
     def rotate_weekly_note_if_needed(self, run_date: date) -> bool:
         self.ensure_weekly_note_exists()
@@ -135,7 +135,7 @@ class NoteManager:
             return False
 
         archive_name = self.config.archive_name_pattern.format(date=run_date.isoformat())
-        archive_path = self.config.weekly_dir / archive_name
+        archive_path = self.config.weekly_notes_dir / archive_name
         if archive_path.exists():
             return False
 
@@ -153,7 +153,7 @@ class NoteManager:
         return _read_marker_block(text, "weekly-synthesis")
 
     def update_daily_note(self, run_date: date, top_paper: ProcessedPaper) -> Path:
-        daily_path = self.config.daily_dir / f"{run_date.isoformat()}.md"
+        daily_path = self.config.daily_notes_dir / f"{run_date.isoformat()}.md"
         if daily_path.exists():
             text = daily_path.read_text(encoding="utf-8")
         else:
@@ -164,7 +164,7 @@ class NoteManager:
             top_paper.filename_stem,
             top_paper.paper.title,
             style=self.config.link_style,
-            from_subdir="daily",
+            from_subdir="daily-notes",
         )
         block = f"## Today's Top Paper\n{link} - {top_paper.micro_summary}"
         updated = _replace_marker_block(text, "daily-top-paper", block)
@@ -179,7 +179,7 @@ class NoteManager:
         existing_additions = _read_marker_block(updated, "weekly-daily-additions")
         day_name = run_date.strftime("%A")
         entries = [
-            f"- {render_link(paper.filename_stem, paper.paper.title, style=self.config.link_style, from_subdir='weekly')} - {paper.micro_summary}"
+            f"- {render_link(paper.filename_stem, paper.paper.title, style=self.config.link_style, from_subdir='weekly-notes')} - {paper.micro_summary}"
             for paper in papers
         ]
         day_block = "\n".join([f"### {day_name}", *entries])

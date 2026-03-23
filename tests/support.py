@@ -13,10 +13,10 @@ def make_app_config(tmp_path: Path, **overrides) -> AppConfig:
     config = AppConfig(
         project_root=tmp_path,
         output_root=tmp_path / "output",
-        papers_dir=tmp_path / "output" / "papers",
-        daily_dir=tmp_path / "output" / "daily",
-        weekly_dir=tmp_path / "output" / "weekly",
-        processed_root=tmp_path / "processed",
+        summaries_dir=tmp_path / "output" / "summaries",
+        daily_notes_dir=tmp_path / "output" / "daily-notes",
+        weekly_notes_dir=tmp_path / "output" / "weekly-notes",
+        pdfs_dir=tmp_path / "output" / "pdfs",
         state_root=tmp_path / "state",
         state_papers_dir=tmp_path / "state" / "papers",
         state_runs_dir=tmp_path / "state" / "runs",
@@ -82,8 +82,8 @@ def make_paper(
 def make_processed_paper(tmp_path: Path, *, paper: ArxivPaper | None = None, micro_summary: str = "Short summary.") -> ProcessedPaper:
     paper = paper or make_paper()
     identity = derive_identity(paper)
-    note_path = tmp_path / "output" / "papers" / identity.note_filename
-    pdf_path = tmp_path / "processed" / identity.pdf_filename
+    note_path = tmp_path / "output" / "summaries" / identity.note_filename
+    pdf_path = tmp_path / "output" / "pdfs" / identity.pdf_filename
     return ProcessedPaper(
         paper=paper,
         paper_key=identity.paper_key,

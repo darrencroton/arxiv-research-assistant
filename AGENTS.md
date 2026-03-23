@@ -23,7 +23,7 @@
 - `user_preferences/`: gitignored mutable local copies created by setup/bootstrap
 - `scripts/setup.sh`: first-time local bootstrap
 - `scripts/launchd/`: public-safe launchd template and renderer
-- `output/`, `processed/`, `state/`, `logs/`: active runtime directories
+- `output/`, `state/`, `logs/`: active runtime directories (`output/summaries`, `output/daily-notes`, `output/weekly-notes`, `output/pdfs`)
 - `tmp/`: local scratch/debug output, never committed
 - `src/re_ass/preferences.py`: Markdown preference parsing, including output-count preferences
 - `src/re_ass/ranking.py`: retrieval, fusion, reranking, and final-selection pipeline

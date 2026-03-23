@@ -14,10 +14,10 @@ cd "$repo_root"
 uv sync --group dev
 
 mkdir -p \
-  output/papers \
-  output/daily \
-  output/weekly \
-  processed \
+  output/summaries \
+  output/daily-notes \
+  output/weekly-notes \
+  output/pdfs \
   state/papers \
   state/runs \
   logs \

@@ -150,7 +150,7 @@ def test_pipeline_returns_zero_and_writes_run_summary_when_no_new_papers(tmp_pat
     assert exit_code == 0
     run_summaries = list(config.state_runs_dir.glob("*.json"))
     assert len(run_summaries) == 1
-    assert not any(config.daily_dir.glob("*.md"))
+    assert not any(config.daily_notes_dir.glob("*.md"))
 
 
 def test_pipeline_continues_after_non_fatal_per_paper_failure(tmp_path: Path, monkeypatch) -> None:
@@ -167,11 +167,11 @@ def test_pipeline_continues_after_non_fatal_per_paper_failure(tmp_path: Path, mo
     exit_code = run(config, date(2026, 3, 24))
 
     assert exit_code == 0
-    assert (config.papers_dir / "Bayer et al - 2026 - Working Paper [arXiv 2603.30001].md").exists()
-    assert not (config.papers_dir / "Bayer et al - 2026 - Broken Paper [arXiv 2603.30002].md").exists()
+    assert (config.summaries_dir / "Bayer et al - 2026 - Working Paper [arXiv 2603.30001].md").exists()
+    assert not (config.summaries_dir / "Bayer et al - 2026 - Broken Paper [arXiv 2603.30002].md").exists()
     assert (config.state_papers_dir / "arxiv_2603.30002.json").exists()
-    assert "Working Paper" in (config.daily_dir / "2026-03-24.md").read_text(encoding="utf-8")
-    weekly_note_text = (config.weekly_dir / config.weekly_note_file).read_text(encoding="utf-8")
+    assert "Working Paper" in (config.daily_notes_dir / "2026-03-24.md").read_text(encoding="utf-8")
+    weekly_note_text = (config.weekly_notes_dir / config.weekly_note_file).read_text(encoding="utf-8")
     assert "Working Paper" in weekly_note_text
     assert "Broken Paper" not in weekly_note_text
 
@@ -184,7 +184,7 @@ def test_pipeline_fails_hard_when_provider_construction_fails(tmp_path: Path, mo
     exit_code = run(config, date(2026, 3, 25))
 
     assert exit_code == 1
-    assert not any(config.papers_dir.glob("*.md"))
+    assert not any(config.summaries_dir.glob("*.md"))
     run_summary = next(config.state_runs_dir.glob("*.json")).read_text(encoding="utf-8")
     assert "provider missing" in run_summary
 
@@ -212,7 +212,7 @@ def test_pipeline_writes_verbatim_summariser_note_output(tmp_path: Path, monkeyp
     exit_code = run(config, date(2026, 3, 26))
 
     assert exit_code == 0
-    note_path = config.papers_dir / "Bayer et al - 2026 - Verbatim Paper [arXiv 2603.30011].md"
+    note_path = config.summaries_dir / "Bayer et al - 2026 - Verbatim Paper [arXiv 2603.30011].md"
     assert note_path.read_text(encoding="utf-8") == raw_summary
 
 
@@ -281,11 +281,11 @@ def test_pipeline_backfill_leaves_current_weekly_summary_unchanged(tmp_path: Pat
     exit_code = run(config, date(2026, 3, 23), backfill=True)
 
     assert exit_code == 0
-    assert "Backfill Paper" in (config.daily_dir / "2026-03-23.md").read_text(encoding="utf-8")
+    assert "Backfill Paper" in (config.daily_notes_dir / "2026-03-23.md").read_text(encoding="utf-8")
     weekly_text = manager.weekly_note_path.read_text(encoding="utf-8")
     assert "Live synthesis." in weekly_text
     assert "Backfill Paper" not in weekly_text
-    assert not (config.weekly_dir / "2026-03-23-weekly-arxiv.md").exists()
+    assert not (config.weekly_notes_dir / "2026-03-23-weekly-arxiv.md").exists()
 
 
 def test_pipeline_records_interval_and_ranking_diagnostics(tmp_path: Path, monkeypatch) -> None:

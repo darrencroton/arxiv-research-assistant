@@ -91,5 +91,5 @@ def render_link(filename_stem: str, display_title: str, *, style: str, from_subd
         raise ValueError(f"Unsupported link style '{style}'.")
 
     encoded_filename = quote(f"{filename_stem}.md")
-    relative_path = f"../papers/{encoded_filename}" if from_subdir else f"papers/{encoded_filename}"
+    relative_path = f"../summaries/{encoded_filename}" if from_subdir else f"summaries/{encoded_filename}"
     return f"[{display_title}]({relative_path})"

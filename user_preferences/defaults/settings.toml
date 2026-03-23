@@ -1,11 +1,9 @@
 [output]
 root = "output"
-papers_dir = "papers"
-daily_dir = "daily"
-weekly_dir = "weekly"
-
-[processed]
-root = "processed"
+summaries_dir = "summaries"
+daily_notes_dir = "daily-notes"
+weekly_notes_dir = "weekly-notes"
+pdfs_dir = "pdfs"
 
 [state]
 root = "state"
