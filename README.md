@@ -109,7 +109,7 @@ You can:
 - point `[output]` at folders inside your notes directory or vault
 - symlink `output/` subdirectories into your notes directory or vault
 
-If you want custom note templates, read [Custom daily and weekly templates](user_preferences/templates/README.md) before your first run.
+If you want custom note templates, configure these before your first run (see below).
 
 ### 5. Run once manually
 
