@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 import re
 import shutil
@@ -24,22 +24,16 @@ _ROTATION_DAYS = {
 
 DEFAULT_DAILY_TEMPLATE = """# {{date}}
 
-<!-- re-ass:daily-top-paper:start -->
-## Today's Top Paper
-<!-- re-ass:daily-top-paper:end -->
+##  TODAY'S TOP PAPER
 """
 
 DEFAULT_WEEKLY_TEMPLATE = """# This Week's ArXiv Overview
 
 ## Synthesis
-<!-- re-ass:weekly-synthesis:start -->
 *(A synthesis of this week's papers will be automatically generated here. Max 100 words.)*
-<!-- re-ass:weekly-synthesis:end -->
 
 ---
 ## Daily Additions
-<!-- re-ass:weekly-daily-additions:start -->
-<!-- re-ass:weekly-daily-additions:end -->
 """
 
 DEFAULT_PREFERENCES_FILE = """# Arxiv Priorities
@@ -61,32 +55,87 @@ DEFAULT_PREFERENCES_FILE = """# Arxiv Priorities
 """
 
 
-def _replace_marker_block(text: str, marker_name: str, body: str) -> str:
-    pattern = re.compile(
-        rf"(<!-- re-ass:{re.escape(marker_name)}:start -->)(?P<body>.*?)(<!-- re-ass:{re.escape(marker_name)}:end -->)",
-        re.DOTALL,
-    )
-    match = pattern.search(text)
-    if match is None:
-        raise ValueError(f"Missing managed marker '{marker_name}' in note content.")
-
-    replacement = f"{match.group(1)}\n{body.rstrip()}\n{match.group(3)}"
-    return text[:match.start()] + replacement + text[match.end():]
+def _find_heading_line(lines: list[str], heading: str) -> int | None:
+    for index, line in enumerate(lines):
+        if line.rstrip("\n") == heading:
+            return index
+    return None
 
 
-def _read_marker_block(text: str, marker_name: str) -> str:
-    pattern = re.compile(
-        rf"<!-- re-ass:{re.escape(marker_name)}:start -->(?P<body>.*?)<!-- re-ass:{re.escape(marker_name)}:end -->",
-        re.DOTALL,
-    )
-    match = pattern.search(text)
-    if match is None:
-        raise ValueError(f"Missing managed marker '{marker_name}' in note content.")
-    return match.group("body").strip()
+def _is_top_level_heading(line: str) -> bool:
+    return line.startswith("## ")
 
 
-def _upsert_day_block(existing_body: str, day_name: str, new_block: str) -> str:
-    pattern = re.compile(rf"(?ms)^### {re.escape(day_name)}\n.*?(?=^### |\Z)")
+def _section_bounds(lines: list[str], heading: str) -> tuple[int, int] | None:
+    heading_index = _find_heading_line(lines, heading)
+    if heading_index is None:
+        return None
+
+    next_heading_index: int | None = None
+    for index in range(heading_index + 1, len(lines)):
+        if _is_top_level_heading(lines[index]):
+            next_heading_index = index
+            break
+
+    if next_heading_index is None:
+        return heading_index, len(lines)
+
+    end_index = next_heading_index
+    probe = next_heading_index - 1
+    while probe > heading_index and not lines[probe].strip():
+        probe -= 1
+    if probe > heading_index and lines[probe].strip() == "---":
+        end_index = probe
+
+    while end_index > heading_index + 1 and not lines[end_index - 1].strip():
+        end_index -= 1
+
+    return heading_index, end_index
+
+
+def _replace_section(text: str, heading: str, body: str) -> str:
+    lines = text.splitlines(keepends=True)
+    bounds = _section_bounds(lines, heading)
+    if bounds is None:
+        return _append_section(text, heading, body)
+
+    heading_index, end_index = bounds
+    prefix = "".join(lines[:heading_index])
+    suffix = "".join(lines[end_index:])
+    section = _render_section(heading, body, has_suffix=bool(suffix))
+    return prefix + section + suffix
+
+
+def _append_section(text: str, heading: str, body: str) -> str:
+    prefix = text.rstrip()
+    if prefix:
+        prefix += "\n\n"
+    return prefix + _render_section(heading, body, has_suffix=False)
+
+
+def _read_section(text: str, heading: str) -> str:
+    lines = text.splitlines(keepends=True)
+    bounds = _section_bounds(lines, heading)
+    if bounds is None:
+        return ""
+
+    heading_index, end_index = bounds
+    body = "".join(lines[heading_index + 1:end_index]).strip()
+    return body
+
+
+def _render_section(heading: str, body: str, *, has_suffix: bool) -> str:
+    content = body.rstrip()
+    if content:
+        section = f"{heading}\n\n{content}"
+    else:
+        section = heading
+    section += "\n\n" if has_suffix else "\n"
+    return section
+
+
+def _upsert_day_block(existing_body: str, day_heading: str, new_block: str) -> str:
+    pattern = re.compile(rf"(?ms)^### {re.escape(day_heading)}\n.*?(?=^### |\Z)")
     if pattern.search(existing_body):
         return pattern.sub(new_block.rstrip(), existing_body, count=1).strip()
     if not existing_body.strip():
@@ -94,8 +143,50 @@ def _upsert_day_block(existing_body: str, day_name: str, new_block: str) -> str:
     return f"{existing_body.rstrip()}\n\n{new_block.rstrip()}".strip()
 
 
+def _ordinal(day_number: int) -> str:
+    if 10 <= day_number % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(day_number % 10, "th")
+    return f"{day_number}{suffix}"
+
+
+def _format_day_heading(run_date: date) -> str:
+    return f"{run_date.strftime('%A')} {_ordinal(run_date.day)}"
+
+
+def _week_start(run_date: date, rotation_day: str) -> date:
+    rotation_index = _ROTATION_DAYS[rotation_day]
+    delta_days = (run_date.weekday() - rotation_index) % 7
+    return run_date - timedelta(days=delta_days)
+
+
+def _format_week_range(run_date: date, rotation_day: str) -> str:
+    start = _week_start(run_date, rotation_day)
+    end = start + timedelta(days=6)
+
+    if start.year == end.year and start.month == end.month:
+        return f"{start.day}-{end.day} {start.strftime('%B %Y')}"
+    if start.year == end.year:
+        return f"{start.day} {start.strftime('%B')} - {end.day} {end.strftime('%B %Y')}"
+    return f"{start.day} {start.strftime('%B %Y')} - {end.day} {end.strftime('%B %Y')}"
+
+
+def _weekly_title(run_date: date, rotation_day: str) -> str:
+    return f"# This Week's ArXiv Overview {_format_week_range(run_date, rotation_day)}"
+
+
+def _replace_weekly_title(text: str, title: str) -> str:
+    lines = text.splitlines(keepends=True)
+    for index, line in enumerate(lines):
+        if line.startswith("# "):
+            lines[index] = f"{title}\n"
+            return "".join(lines)
+    return f"{title}\n\n{text.lstrip()}"
+
+
 class NoteManager:
-    """Creates and updates user-facing notes through explicit managed markers."""
+    """Creates and updates user-facing notes through managed heading sections."""
 
     def __init__(self, config: AppConfig) -> None:
         self.config = config
@@ -150,7 +241,7 @@ class NoteManager:
 
     def read_weekly_synthesis(self) -> str:
         text = self.ensure_weekly_note_exists().read_text(encoding="utf-8")
-        return _read_marker_block(text, "weekly-synthesis")
+        return _read_section(text, "## Synthesis")
 
     def update_daily_note(self, run_date: date, top_paper: ProcessedPaper) -> Path:
         daily_path = self.config.daily_notes_dir / f"{run_date.isoformat()}.md"
@@ -166,25 +257,32 @@ class NoteManager:
             style=self.config.link_style,
             from_subdir="daily-notes",
         )
-        block = f"## Today's Top Paper\n{link} - {top_paper.micro_summary}"
-        updated = _replace_marker_block(text, "daily-top-paper", block)
+        block = "\n".join(
+            [
+                f"**Title:** {link}",
+                "",
+                f"**Summary:** {top_paper.micro_summary}",
+            ]
+        )
+        updated = _replace_section(text, "##  TODAY'S TOP PAPER", block)
         daily_path.write_text(updated.rstrip() + "\n", encoding="utf-8")
         return daily_path
 
     def update_weekly_note(self, run_date: date, papers: list[ProcessedPaper], synthesis: str) -> Path:
         weekly_path = self.ensure_weekly_note_exists()
         text = weekly_path.read_text(encoding="utf-8")
-        updated = _replace_marker_block(text, "weekly-synthesis", synthesis.strip())
+        updated = _replace_weekly_title(text, _weekly_title(run_date, self.config.rotation_day))
+        updated = _replace_section(updated, "## Synthesis", synthesis.strip())
 
-        existing_additions = _read_marker_block(updated, "weekly-daily-additions")
-        day_name = run_date.strftime("%A")
+        existing_additions = _read_section(updated, "## Daily Additions")
+        day_heading = _format_day_heading(run_date)
         entries = [
             f"- {render_link(paper.filename_stem, paper.paper.title, style=self.config.link_style, from_subdir='weekly-notes')} - {paper.micro_summary}"
             for paper in papers
         ]
-        day_block = "\n".join([f"### {day_name}", *entries])
-        additions = _upsert_day_block(existing_additions, day_name, day_block)
-        updated = _replace_marker_block(updated, "weekly-daily-additions", additions)
+        day_block = "\n".join([f"### {day_heading}", *entries])
+        additions = _upsert_day_block(existing_additions, day_heading, day_block)
+        updated = _replace_section(updated, "## Daily Additions", additions)
 
         weekly_path.write_text(updated.rstrip() + "\n", encoding="utf-8")
         return weekly_path
