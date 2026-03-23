@@ -2,7 +2,7 @@
 
 `re-ass` is a local arXiv discovery tool for researchers. It automatically fetches recent papers from selected arXiv categories, ranks them against your research priorities, and writes high quality Markdown summaries for the top ranked, direct to your Obsidian daily/weekly notes (or wherever you keep your research).
 
-It uses the same core engine as [Science Paper Summariser](https://github.com/darrencroton/science-paper-summariser) to produce formatted paper summaries with a glossary, tags, and full citations back to the original paper (to ensure quality).
+It uses the same core engine as [Science Paper Summariser](https://github.com/darrencroton/science-paper-summariser) to produce structured paper summaries, including a glossary, tags, and full citations back to the original paper (to ensure quality).
 
 The default project knowledge is tuned for `astro-ph`, but can easily be adapted for other research fields.
 
