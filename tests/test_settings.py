@@ -44,6 +44,24 @@ def test_load_config_parses_explicit_llm_provider_settings(tmp_path: Path) -> No
     assert config.llm.prompt_debug_file == (tmp_path / "archive" / "prompts" / "last.txt").resolve()
 
 
+def test_load_config_parses_llm_effort_for_cli_provider(tmp_path: Path) -> None:
+    config_path = tmp_path / "settings.toml"
+    config_path.write_text(
+        "[arxiv]\n"
+        "default_categories = ['astro-ph.CO']\n\n"
+        "[llm]\n"
+        "mode = 'cli'\n"
+        "provider = 'copilot'\n"
+        "effort = 'high'\n",
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.llm.effort == "high"
+    assert config.llm.provider_config()["effort"] == "high"
+
+
 def test_load_config_uses_new_runtime_sections() -> None:
     config = load_config(project_root=Path("/tmp/re-ass-test"))
 
@@ -62,7 +80,26 @@ def test_load_config_uses_new_runtime_sections() -> None:
     assert config.ranking_final_pool_size == 24
     assert config.ranking_min_selection_score == 75.0
     assert config.ranking_passthrough_candidate_count == 50
+    assert config.llm.effort is None
     assert config.llm.prompt_debug_file == Path("/tmp/re-ass-test/tmp/paper_summariser/prompt.txt").resolve()
+
+
+def test_load_config_treats_blank_llm_effort_as_unset(tmp_path: Path) -> None:
+    config_path = tmp_path / "settings.toml"
+    config_path.write_text(
+        "[arxiv]\n"
+        "default_categories = ['astro-ph.CO']\n\n"
+        "[llm]\n"
+        "mode = 'cli'\n"
+        "provider = 'claude'\n"
+        "effort = '  '\n",
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.llm.effort is None
+    assert "effort" not in config.llm.provider_config()
 
 
 def test_load_config_supports_legacy_arxiv_max_results_key(tmp_path: Path) -> None:
@@ -130,4 +167,18 @@ def test_load_config_rejects_invalid_rotation_day(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ValueError, match="notes.rotation_day"):
+        load_config(config_path)
+
+
+def test_load_config_rejects_invalid_llm_effort(tmp_path: Path) -> None:
+    config_path = tmp_path / "settings.toml"
+    config_path.write_text(
+        "[arxiv]\n"
+        "default_categories = ['astro-ph.CO']\n\n"
+        "[llm]\n"
+        "effort = 'xhigh'\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="llm.effort"):
         load_config(config_path)

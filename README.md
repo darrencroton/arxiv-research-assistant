@@ -126,6 +126,12 @@ Main config: `user_preferences/settings.toml`
 - `[arxiv]`: limits, categories, and ranking pool sizes
 - `[llm]`: provider and model settings
 
+`[llm]` also supports an optional `effort` setting for CLI providers:
+
+- `effort = ""`: use the provider default
+- `effort = "low"`, `"medium"`, or `"high"`: set reasoning effort for `claude`, `codex`, or `copilot`
+- `gemini` currently ignores `effort` and logs a warning
+
 In `user_preferences/preferences.md`, you can optionally set the number of papers to save:
 
 ```markdown

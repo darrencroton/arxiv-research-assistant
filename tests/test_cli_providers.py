@@ -1,4 +1,5 @@
 import subprocess
+import logging
 
 import pytest
 
@@ -53,6 +54,24 @@ def test_claude_cli_process_document_adds_auth_hint(
         provider.process_document("", False, "system", "user")
 
 
+def test_claude_cli_builds_command_with_effort(
+    cli_on_path: None,
+) -> None:
+    provider = ClaudeCLI({"timeout": 30, "model": "claude-sonnet-4-6", "effort": "high"})
+
+    assert provider._build_command("prompt") == [
+        "claude",
+        "--output-format",
+        "text",
+        "--model",
+        "claude-sonnet-4-6",
+        "--effort",
+        "high",
+        "-p",
+        "prompt",
+    ]
+
+
 def test_codex_cli_readiness_requires_login(
     monkeypatch: pytest.MonkeyPatch,
     cli_on_path: None,
@@ -73,6 +92,22 @@ def test_codex_cli_readiness_requires_login(
         provider.validate_runtime_ready()
 
 
+def test_codex_cli_builds_command_with_effort(
+    cli_on_path: None,
+) -> None:
+    provider = CodexCLI({"timeout": 30, "model": "gpt-5.4", "effort": "medium"})
+
+    assert provider._build_command("prompt") == [
+        "codex",
+        "exec",
+        "-c",
+        'model="gpt-5.4"',
+        "-c",
+        'model_reasoning_effort="medium"',
+        "-",
+    ]
+
+
 def test_gemini_cli_accepts_api_key(
     monkeypatch: pytest.MonkeyPatch,
     cli_on_path: None,
@@ -82,6 +117,21 @@ def test_gemini_cli_accepts_api_key(
     provider = GeminiCLI({"timeout": 30})
 
     provider.validate_runtime_ready()
+
+
+def test_gemini_cli_ignores_effort_and_warns_once(
+    monkeypatch: pytest.MonkeyPatch,
+    cli_on_path: None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+
+    with caplog.at_level(logging.WARNING):
+        provider = GeminiCLI({"timeout": 30, "effort": "high"})
+
+    assert provider._build_command("prompt") == ["gemini", "-o", "text", "-p", "prompt"]
+    warning_messages = [record.message for record in caplog.records]
+    assert warning_messages == ["[WARNING] Gemini CLI ignores llm.effort; using Gemini defaults."]
 
 
 def test_gemini_cli_requires_supported_automation_credentials(
@@ -112,6 +162,26 @@ def test_copilot_cli_accepts_token_env_var(
     provider = CopilotCLI({"timeout": 30})
 
     provider.validate_runtime_ready()
+
+
+def test_copilot_cli_builds_command_with_effort(
+    cli_on_path: None,
+) -> None:
+    provider = CopilotCLI({"timeout": 30, "model": "gpt-5.2", "effort": "low"})
+
+    assert provider._build_command("prompt") == [
+        "copilot",
+        "--allow-all-tools",
+        "--output-format",
+        "text",
+        "--silent",
+        "--model",
+        "gpt-5.2",
+        "--effort",
+        "low",
+        "-p",
+        "prompt",
+    ]
 
 
 def test_copilot_cli_requires_login_or_token(

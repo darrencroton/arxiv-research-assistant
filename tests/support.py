@@ -41,6 +41,7 @@ def make_app_config(tmp_path: Path, **overrides) -> AppConfig:
             mode="cli",
             provider="claude",
             model=None,
+            effort=None,
             timeout_seconds=60,
             max_output_tokens=12288,
             temperature=0.2,

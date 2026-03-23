@@ -19,6 +19,7 @@ _VALID_ROTATION_DAYS = (
     "saturday",
     "sunday",
 )
+_VALID_LLM_EFFORTS = ("low", "medium", "high")
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,6 +29,7 @@ class LlmConfig:
     mode: str
     provider: str
     model: str | None
+    effort: str | None
     timeout_seconds: int
     max_output_tokens: int
     temperature: float
@@ -45,6 +47,8 @@ class LlmConfig:
         }
         if self.model:
             config["model"] = self.model
+        if self.mode == "cli" and self.effort:
+            config["effort"] = self.effort
         if self.provider == "ollama":
             config["base_url"] = self.ollama_base_url
         return config
@@ -201,11 +205,18 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
     provider = str(llm_data.get("provider", "codex")).strip().lower()
     raw_model = llm_data.get("model")
     model = str(raw_model).strip() if raw_model not in (None, "") else None
+    raw_effort = llm_data.get("effort")
+    effort = str(raw_effort).strip().lower() if raw_effort is not None else ""
+    if effort == "":
+        effort = None
+    elif effort not in _VALID_LLM_EFFORTS:
+        raise ValueError(f"llm.effort must be one of {_VALID_LLM_EFFORTS}, got '{effort}'.")
 
     llm = LlmConfig(
         mode=mode,
         provider=provider,
         model=model,
+        effort=effort,
         timeout_seconds=int(llm_data.get("timeout_seconds", 900)),
         max_output_tokens=int(llm_data.get("max_output_tokens", 12288)),
         temperature=float(llm_data.get("temperature", 0.2)),
