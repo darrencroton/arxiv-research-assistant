@@ -27,6 +27,27 @@ class ReadinessFailingProvider:
         raise ValueError("login missing")
 
 
+class RecordingProvider:
+    def __init__(self, *, response: str) -> None:
+        self.response = response
+        self.calls: list[dict[str, object]] = []
+
+    def validate_runtime_ready(self) -> None:
+        return None
+
+    def process_document(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.response
+
+
+class FailingTextProvider:
+    def validate_runtime_ready(self) -> None:
+        return None
+
+    def process_document(self, **_kwargs):
+        raise RuntimeError("synthetic failure")
+
+
 def test_generation_service_fails_fast_when_provider_cannot_be_created(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("re_ass.generation_service.create_provider", lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("missing binary")))
 
@@ -67,3 +88,68 @@ def test_generation_service_raises_when_summariser_fails(tmp_path: Path) -> None
 
     with pytest.raises(GenerationError, match="Unable to create paper note"):
         service.build_paper_note_content(make_paper(title="Broken Paper"), tmp_path / "paper.pdf")
+
+
+def test_generate_weekly_synthesis_uses_full_weekly_additions_and_word_limit(tmp_path: Path) -> None:
+    provider = RecordingProvider(response="Rewritten weekly synthesis.")
+    service = GenerationService(
+        config=make_app_config(tmp_path).llm,
+        provider=provider,
+        paper_summariser=StubPaperSummariser(),
+    )
+    weekly_additions = (
+        "### Monday 23rd\n\n"
+        "**Title:** [[Paper One]]\n\n"
+        "**Summary:** First summary.\n\n"
+        "---\n\n"
+        "### Tuesday 24th\n\n"
+        "**Title:** [[Paper Two]]\n\n"
+        "**Summary:** Second summary.\n"
+    )
+
+    synthesis = service.generate_weekly_synthesis("Earlier synthesis.", weekly_additions, word_limit=150)
+
+    assert synthesis == "Rewritten weekly synthesis."
+    assert provider.calls == [
+        {
+            "content": "",
+            "is_pdf": False,
+            "system_prompt": (
+                "Rewrite the weekly synthesis for this rolling research note from the full set of weekly paper "
+                "additions gathered so far. Produce one cohesive plain-text paragraph that synthesises cross-paper "
+                "themes, methodological connections, tensions, and how the week's story is evolving. Prefer "
+                "synthesis over listing papers one by one. Stay within 150 words."
+            ),
+            "user_prompt": (
+                "Current synthesis:\nEarlier synthesis.\n\n"
+                "Weekly paper additions so far:\n"
+                "### Monday 23rd\n\n"
+                "**Title:** [[Paper One]]\n\n"
+                "**Summary:** First summary.\n\n"
+                "---\n\n"
+                "### Tuesday 24th\n\n"
+                "**Title:** [[Paper Two]]\n\n"
+                "**Summary:** Second summary.\n"
+            ),
+            "max_tokens": 768,
+        }
+    ]
+
+
+def test_generate_weekly_synthesis_fallback_rebuilds_from_all_weekly_summaries(tmp_path: Path) -> None:
+    service = GenerationService(
+        config=make_app_config(tmp_path).llm,
+        provider=FailingTextProvider(),
+        paper_summariser=StubPaperSummariser(),
+    )
+    weekly_additions = (
+        "### Monday 23rd\n\n"
+        "**Summary:** First summary.\n\n"
+        "---\n\n"
+        "### Tuesday 24th\n\n"
+        "**Summary:** Second summary.\n"
+    )
+
+    synthesis = service.generate_weekly_synthesis("Stale synthesis.", weekly_additions, word_limit=12)
+
+    assert synthesis == "This week's notable papers include First summary; Second summary."

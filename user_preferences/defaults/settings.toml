@@ -30,6 +30,8 @@ archive_name_pattern = "{date}-weekly-arxiv.md"
 daily_top_paper_heading = "## TODAY'S TOP PAPER"
 weekly_synthesis_heading = "## SYNTHESIS"
 weekly_additions_heading = "## DAILY ADDITIONS"
+weekly_synthesis_word_limit_start = 100
+weekly_synthesis_word_limit_end = 200
 
 [arxiv]
 max_papers = 3

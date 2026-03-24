@@ -71,6 +71,7 @@ class FakeGenerationService:
         self.failing_titles = failing_titles or set()
         self.note_content_by_title = note_content_by_title or {}
         self.provider = object()
+        self.weekly_synthesis_calls: list[dict[str, object]] = []
 
     def generate_micro_summary(self, paper):
         return f"Summary for {paper.title}"
@@ -88,8 +89,15 @@ class FakeGenerationService:
             f"# {paper.title}\n\nAuthors: Doe J.\nPublished: March 2026 ([Link](https://arxiv.org/abs/example))\n\n## Notes\nGenerated.\n",
         )
 
-    def generate_weekly_synthesis(self, _existing_synthesis: str, papers):
-        return f"Synthesis for {len(papers)} papers."
+    def generate_weekly_synthesis(self, existing_synthesis: str, weekly_additions: str, *, word_limit: int):
+        self.weekly_synthesis_calls.append(
+            {
+                "existing_synthesis": existing_synthesis,
+                "weekly_additions": weekly_additions,
+                "word_limit": word_limit,
+            }
+        )
+        return f"Synthesis under {word_limit} words."
 
 
 class FakeRanker:
@@ -283,6 +291,48 @@ def test_pipeline_backfill_renders_daily_template_for_target_date(tmp_path: Path
     assert exit_code == 0
     daily_text = (config.daily_notes_dir / "2026-03-23.md").read_text(encoding="utf-8")
     assert daily_text.startswith("# DAILY NOTE: Monday 23rd March 2026\n")
+
+
+def test_pipeline_regenerates_weekly_synthesis_from_full_week_context(tmp_path: Path, monkeypatch) -> None:
+    config = make_app_config(tmp_path)
+    manager = NoteManager(config)
+    manager.bootstrap()
+    manager.weekly_note_path.write_text(
+        "# ARXIV PAPERS FOR THE WEEK 23rd - 27th March 2026\n\n"
+        "## SYNTHESIS\n\n"
+        "Earlier synthesis.\n\n"
+        "---\n"
+        "## DAILY ADDITIONS\n\n"
+        "### Monday 23rd\n\n"
+        "**Title:** [[Existing]]\n\n"
+        "**Summary:** Existing summary.\n",
+        encoding="utf-8",
+    )
+    paper = make_paper(arxiv_id="2603.30061", title="Wednesday Paper")
+    generation_service = FakeGenerationService()
+    monkeypatch.setattr("re_ass.pipeline.ArxivFetcher", lambda **_kwargs: FakeFetcher([paper]))
+    monkeypatch.setattr("re_ass.pipeline.PaperRanker", lambda **kwargs: FakeRanker(**kwargs))
+    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr("re_ass.pipeline.GenerationService", lambda **_kwargs: generation_service)
+
+    exit_code = run(config, date(2026, 3, 25))
+
+    assert exit_code == 0
+    assert generation_service.weekly_synthesis_calls == [
+        {
+            "existing_synthesis": "Earlier synthesis.",
+            "weekly_additions": (
+                "### Monday 23rd\n\n"
+                "**Title:** [[Existing]]\n\n"
+                "**Summary:** Existing summary.\n\n"
+                "---\n\n"
+                "### Wednesday 25th\n\n"
+                "**Title:** [[Bayer et al - 2026 - Wednesday Paper [arXiv 2603.30061]|Wednesday Paper]]\n\n"
+                "**Summary:** Summary for Wednesday Paper"
+            ),
+            "word_limit": 150,
+        }
+    ]
 
 
 def test_pipeline_records_interval_and_ranking_diagnostics(tmp_path: Path, monkeypatch) -> None:

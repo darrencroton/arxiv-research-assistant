@@ -115,7 +115,8 @@ The `---` separator is optional, but the built-in template uses it and it reads 
 
 ### Weekly note synthesis
 
-`re-ass` writes a short rolling synthesis for the current week into the heading configured by `notes.weekly_synthesis_heading`.
+`re-ass` rewrites a rolling synthesis for the current week from the full weekly additions gathered so far into the heading configured by `notes.weekly_synthesis_heading`.
+The default word budget starts at 100 words and expands through the week to 200 words by the end of the note window.
 
 ### Weekly daily additions
 

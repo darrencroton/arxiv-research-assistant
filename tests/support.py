@@ -70,6 +70,8 @@ def make_app_config(tmp_path: Path, **overrides) -> AppConfig:
         daily_top_paper_heading="## TODAY'S TOP PAPER",
         weekly_synthesis_heading="## SYNTHESIS",
         weekly_additions_heading="## DAILY ADDITIONS",
+        weekly_synthesis_word_limit_start=100,
+        weekly_synthesis_word_limit_end=200,
         max_papers=10,
         arxiv_page_size=50,
         min_selection_score=75.0,

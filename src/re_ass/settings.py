@@ -92,6 +92,8 @@ class AppConfig:
     daily_top_paper_heading: str
     weekly_synthesis_heading: str
     weekly_additions_heading: str
+    weekly_synthesis_word_limit_start: int
+    weekly_synthesis_word_limit_end: int
 
     # arxiv
     max_papers: int
@@ -129,6 +131,17 @@ def _required_string(data: dict[str, object], key: str, section_name: str) -> st
     value = str(raw_value)
     if not value.strip():
         raise ValueError(f"Setting [{section_name}].{key} must not be blank.")
+    return value
+
+
+def _positive_int(data: dict[str, object], key: str, section_name: str, *, default: int) -> int:
+    raw_value = data.get(key, default)
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"Setting [{section_name}].{key} must be a positive integer.") from error
+    if value <= 0:
+        raise ValueError(f"Setting [{section_name}].{key} must be a positive integer.")
     return value
 
 
@@ -204,6 +217,23 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
     daily_top_paper_heading = _required_string(notes_data, "daily_top_paper_heading", "notes")
     weekly_synthesis_heading = _required_string(notes_data, "weekly_synthesis_heading", "notes")
     weekly_additions_heading = _required_string(notes_data, "weekly_additions_heading", "notes")
+    weekly_synthesis_word_limit_start = _positive_int(
+        notes_data,
+        "weekly_synthesis_word_limit_start",
+        "notes",
+        default=100,
+    )
+    weekly_synthesis_word_limit_end = _positive_int(
+        notes_data,
+        "weekly_synthesis_word_limit_end",
+        "notes",
+        default=200,
+    )
+    if weekly_synthesis_word_limit_end < weekly_synthesis_word_limit_start:
+        raise ValueError(
+            "Setting [notes].weekly_synthesis_word_limit_end must be greater than or equal to "
+            "[notes].weekly_synthesis_word_limit_start."
+        )
 
     # Arxiv
     min_selection_score = float(arxiv_data.get("min_selection_score", 75.0))
@@ -262,6 +292,8 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
         daily_top_paper_heading=daily_top_paper_heading,
         weekly_synthesis_heading=weekly_synthesis_heading,
         weekly_additions_heading=weekly_additions_heading,
+        weekly_synthesis_word_limit_start=weekly_synthesis_word_limit_start,
+        weekly_synthesis_word_limit_end=weekly_synthesis_word_limit_end,
         max_papers=int(arxiv_data.get("max_papers", 3)),
         arxiv_page_size=int(arxiv_data.get("page_size", arxiv_data.get("max_results", 100))),
         min_selection_score=min_selection_score,

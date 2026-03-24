@@ -96,6 +96,22 @@ def _read_section(text: str, heading: str) -> str:
     return body
 
 
+def _build_weekly_additions(existing_additions: str, run_date: date, papers: list[ProcessedPaper], *, link_style: str) -> str:
+    day_heading = _format_day_heading(run_date)
+    entries = [
+        "\n".join(
+            [
+                f"**Title:** {render_link(paper.filename_stem, paper.paper.title, style=link_style, from_subdir='weekly-notes')}",
+                "",
+                f"**Summary:** {paper.micro_summary}",
+            ]
+        )
+        for paper in papers
+    ]
+    day_block = "\n".join([f"### {day_heading}", "", "\n\n".join(entries)])
+    return _upsert_day_block(existing_additions, day_heading, day_block)
+
+
 def _render_section(heading: str, body: str, *, has_suffix: bool) -> str:
     content = body.rstrip()
     if content:
@@ -258,6 +274,14 @@ class NoteManager:
         text = self.ensure_weekly_note_exists().read_text(encoding="utf-8")
         return _read_section(text, self.config.weekly_synthesis_heading)
 
+    def read_weekly_additions(self) -> str:
+        text = self.ensure_weekly_note_exists().read_text(encoding="utf-8")
+        return _read_section(text, self.config.weekly_additions_heading)
+
+    def preview_weekly_additions(self, run_date: date, papers: list[ProcessedPaper]) -> str:
+        existing_additions = self.read_weekly_additions()
+        return _build_weekly_additions(existing_additions, run_date, papers, link_style=self.config.link_style)
+
     def update_daily_note(self, run_date: date, top_paper: ProcessedPaper) -> Path:
         daily_path = self.config.daily_notes_dir / f"{run_date.isoformat()}.md"
         if daily_path.exists():
@@ -290,21 +314,8 @@ class NoteManager:
         text = weekly_path.read_text(encoding="utf-8")
         updated = _replace_weekly_title(text, _weekly_title(run_date, self.config.rotation_day))
         updated = _replace_section(updated, self.config.weekly_synthesis_heading, synthesis.strip())
-
         existing_additions = _read_section(updated, self.config.weekly_additions_heading)
-        day_heading = _format_day_heading(run_date)
-        entries = [
-            "\n".join(
-                [
-                    f"**Title:** {render_link(paper.filename_stem, paper.paper.title, style=self.config.link_style, from_subdir='weekly-notes')}",
-                    "",
-                    f"**Summary:** {paper.micro_summary}",
-                ]
-            )
-            for paper in papers
-        ]
-        day_block = "\n".join([f"### {day_heading}", "", "\n\n".join(entries)])
-        additions = _upsert_day_block(existing_additions, day_heading, day_block)
+        additions = _build_weekly_additions(existing_additions, run_date, papers, link_style=self.config.link_style)
         updated = _replace_section(updated, self.config.weekly_additions_heading, additions)
 
         weekly_path.write_text(updated.rstrip() + "\n", encoding="utf-8")

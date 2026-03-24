@@ -86,6 +86,8 @@ def test_load_config_uses_new_runtime_sections(tmp_path: Path) -> None:
     assert config.daily_top_paper_heading == "## TODAY'S TOP PAPER"
     assert config.weekly_synthesis_heading == "## SYNTHESIS"
     assert config.weekly_additions_heading == "## DAILY ADDITIONS"
+    assert config.weekly_synthesis_word_limit_start == 100
+    assert config.weekly_synthesis_word_limit_end == 200
     assert config.llm.effort is None
     assert config.llm.prompt_debug_file == (tmp_path / "tmp" / "paper_summariser" / "prompt.txt").resolve()
 
@@ -142,6 +144,24 @@ def test_load_config_supports_markdown_links_rotation_day_and_managed_headings(t
     assert config.weekly_additions_heading == "## Added This Week"
 
 
+def test_load_config_supports_weekly_synthesis_word_limit_range(tmp_path: Path) -> None:
+    config_path = tmp_path / "settings.toml"
+    config_path.write_text(
+        "[notes]\n"
+        'daily_top_paper_heading = "## TODAY\'S TOP PAPER"\n'
+        'weekly_synthesis_heading = "## SYNTHESIS"\n'
+        'weekly_additions_heading = "## DAILY ADDITIONS"\n'
+        "weekly_synthesis_word_limit_start = 110\n"
+        "weekly_synthesis_word_limit_end = 190\n",
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.weekly_synthesis_word_limit_start == 110
+    assert config.weekly_synthesis_word_limit_end == 190
+
+
 def test_load_config_requires_managed_heading_settings(tmp_path: Path) -> None:
     config_path = tmp_path / "settings.toml"
     config_path.write_text("[notes]\nweekly_synthesis_heading = '## SYNTHESIS'\n", encoding="utf-8")
@@ -191,6 +211,22 @@ def test_load_config_rejects_invalid_rotation_day(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ValueError, match="notes.rotation_day"):
+        load_config(config_path)
+
+
+def test_load_config_rejects_descending_weekly_synthesis_word_limit_range(tmp_path: Path) -> None:
+    config_path = tmp_path / "settings.toml"
+    config_path.write_text(
+        "[notes]\n"
+        'daily_top_paper_heading = "## TODAY\'S TOP PAPER"\n'
+        'weekly_synthesis_heading = "## SYNTHESIS"\n'
+        'weekly_additions_heading = "## DAILY ADDITIONS"\n'
+        "weekly_synthesis_word_limit_start = 200\n"
+        "weekly_synthesis_word_limit_end = 100\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="weekly_synthesis_word_limit_end"):
         load_config(config_path)
 
 

@@ -19,6 +19,7 @@ from re_ass.state_store import StateStore
 
 
 LOGGER = logging.getLogger(__name__)
+_WEEKDAY_NAMES = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 
 
 def _local_timezone() -> timezone:
@@ -30,6 +31,17 @@ def _local_day_bounds(target_date: date) -> tuple[datetime, datetime]:
     start = datetime.combine(target_date, time.min, tzinfo=local_timezone).astimezone(timezone.utc)
     end = datetime.combine(_next_day(target_date), time.min, tzinfo=local_timezone).astimezone(timezone.utc)
     return start, end
+
+
+def _weekly_synthesis_word_limit(config: AppConfig, run_date: date) -> int:
+    rotation_index = _WEEKDAY_NAMES.index(config.rotation_day)
+    day_index = (run_date.weekday() - rotation_index) % 7
+    day_index = min(day_index, 4)
+    start = config.weekly_synthesis_word_limit_start
+    end = config.weekly_synthesis_word_limit_end
+    if start == end:
+        return start
+    return start + round((end - start) * (day_index / 4))
 
 
 def _determine_interval(
@@ -308,7 +320,12 @@ def run(config: AppConfig, run_date: date | None = None, *, backfill: bool = Fal
 
             if not backfill:
                 existing_synthesis = note_manager.read_weekly_synthesis()
-                synthesis = generation_service.generate_weekly_synthesis(existing_synthesis, successful_papers)
+                weekly_additions = note_manager.preview_weekly_additions(target_date, successful_papers)
+                synthesis = generation_service.generate_weekly_synthesis(
+                    existing_synthesis,
+                    weekly_additions,
+                    word_limit=_weekly_synthesis_word_limit(config, target_date),
+                )
                 note_manager.update_weekly_note(target_date, successful_papers, synthesis)
                 run_summary["weekly_note_updated"] = True
         else:

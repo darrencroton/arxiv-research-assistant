@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 import re
 
-from re_ass.models import ArxivPaper, ProcessedPaper
+from re_ass.models import ArxivPaper
 from re_ass.paper_summariser import PaperSummariser, PaperSummariserError
 from re_ass.paper_summariser.providers import create_provider
 from re_ass.paper_summariser.providers.base import Provider
@@ -16,6 +16,7 @@ from re_ass.settings import LlmConfig
 
 LOGGER = logging.getLogger(__name__)
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+_WEEKLY_SUMMARY_LINE = re.compile(r"(?m)^\*\*Summary:\*\*\s*(.+?)\s*$")
 
 
 class GenerationError(RuntimeError):
@@ -79,23 +80,31 @@ class GenerationService:
         except PaperSummariserError as error:
             raise GenerationError(f"Unable to create paper note for {paper.title}: {error}") from error
 
-    def generate_weekly_synthesis(self, existing_synthesis: str, papers: list[ProcessedPaper]) -> str:
-        """Generate or update the weekly synthesis text."""
+    def generate_weekly_synthesis(self, existing_synthesis: str, weekly_additions: str, *, word_limit: int) -> str:
+        """Generate or update the weekly synthesis text from all weekly additions so far."""
         if self.provider is not None:
-            bullet_summaries = "\n".join(f"- {paper.micro_summary}" for paper in papers)
             try:
                 response = self._run_text_prompt(
-                    "Update this weekly synthesis incorporating these new papers. Max 100 words. Return plain text only.",
-                    f"Current synthesis:\n{existing_synthesis}\n\nNew paper summaries:\n{bullet_summaries}",
-                    max_tokens=min(self.config.max_output_tokens, 512),
+                    (
+                        "Rewrite the weekly synthesis for this rolling research note from the full set of weekly paper "
+                        "additions gathered so far. Produce one cohesive plain-text paragraph that synthesises cross-paper "
+                        "themes, methodological connections, tensions, and how the week's story is evolving. Prefer "
+                        "synthesis over listing papers one by one. Stay within "
+                        f"{word_limit} words."
+                    ),
+                    (
+                        f"Current synthesis:\n{existing_synthesis or '(none)'}\n\n"
+                        f"Weekly paper additions so far:\n{weekly_additions or '(none)'}"
+                    ),
+                    max_tokens=min(self.config.max_output_tokens, 768),
                 )
-                cleaned = self._truncate_words(self._clean_text(response), limit=100)
+                cleaned = self._truncate_words(self._clean_text(response), limit=word_limit)
                 if cleaned:
                     return cleaned
             except GenerationError as error:
                 LOGGER.warning("Weekly synthesis generation failed: %s", error)
 
-        return self._fallback_weekly_synthesis(existing_synthesis, papers)
+        return self._fallback_weekly_synthesis(existing_synthesis, weekly_additions, word_limit=word_limit)
 
     def _run_text_prompt(self, system_prompt: str, user_prompt: str, *, max_tokens: int) -> str:
         try:
@@ -114,16 +123,13 @@ class GenerationService:
         candidate = " ".join(sentences[:2]) if sentences else abstract.strip()
         return self._truncate_words(candidate, limit=45)
 
-    def _fallback_weekly_synthesis(self, existing_synthesis: str, papers: list[ProcessedPaper]) -> str:
-        summaries = [paper.micro_summary.rstrip(".") for paper in papers if paper.micro_summary.strip()]
+    def _fallback_weekly_synthesis(self, existing_synthesis: str, weekly_additions: str, *, word_limit: int) -> str:
+        summaries = self._extract_weekly_micro_summaries(weekly_additions)
         if not summaries:
-            return self._truncate_words(existing_synthesis.strip(), limit=100)
+            return self._truncate_words(existing_synthesis.strip(), limit=word_limit)
 
-        if self._is_placeholder_synthesis(existing_synthesis):
-            base_text = "This week's notable papers include " + "; ".join(summaries) + "."
-        else:
-            base_text = existing_synthesis.strip().rstrip(".") + ". New additions include " + "; ".join(summaries) + "."
-        return self._truncate_words(base_text, limit=100)
+        base_text = "This week's notable papers include " + "; ".join(summaries) + "."
+        return self._truncate_words(base_text, limit=word_limit)
 
     def _clean_text(self, text: str) -> str:
         cleaned = text.strip().strip('"').strip("'")
@@ -137,6 +143,5 @@ class GenerationService:
             return " ".join(words).strip()
         return " ".join(words[:limit]).rstrip(".,;:") + "..."
 
-    def _is_placeholder_synthesis(self, synthesis: str) -> bool:
-        normalized = synthesis.casefold()
-        return "automatically generated here" in normalized or normalized.startswith("*(")
+    def _extract_weekly_micro_summaries(self, weekly_additions: str) -> list[str]:
+        return [match.rstrip(".") for match in _WEEKLY_SUMMARY_LINE.findall(weekly_additions) if match.strip()]
