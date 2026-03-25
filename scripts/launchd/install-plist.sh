@@ -46,3 +46,4 @@ printf 'The LaunchAgent has been reloaded but not kicked off immediately.\n'
 printf 'To test it now, run:\n'
 printf 'launchctl kickstart -k %s\n' "$service_target"
 printf 'This triggers a real re-ass run and may pull the latest available papers immediately.\n'
+printf 'Then check the logs dir (e.g. tail -n 50 logs/last-run.log)\n'

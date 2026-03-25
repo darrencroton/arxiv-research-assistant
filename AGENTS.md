@@ -2,7 +2,7 @@
 
 ## Project Summary
 
-- GitHub repo name: `research-assistant`
+- GitHub repo name: `arxiv-research-assistant`
 - Local package / CLI name: `re-ass`
 - Purpose: fetch relevant arXiv papers, generate Markdown summaries, and maintain daily/weekly outputs with explicit retained state
 - Ranking architecture: one full-pool LLM ranking pass over fetched candidates, then deterministic thresholding and capping in app code
