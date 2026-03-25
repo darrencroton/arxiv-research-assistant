@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import json
 from pathlib import Path
 from typing import Any
@@ -39,10 +39,13 @@ class StateStore:
     """Read and write machine-readable paper and run state."""
 
     def __init__(self, config: AppConfig) -> None:
+        self.state_root = config.state_root
         self.papers_dir = config.state_papers_dir
         self.runs_dir = config.state_runs_dir
+        self.announcement_checkpoint_path = self.state_root / "announcement-checkpoint.json"
 
     def bootstrap(self) -> None:
+        self.state_root.mkdir(parents=True, exist_ok=True)
         self.papers_dir.mkdir(parents=True, exist_ok=True)
         self.runs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -75,7 +78,28 @@ class StateStore:
                 keys.add(str(record["paper_key"]))
         return keys
 
-    def latest_successful_run_end(self) -> datetime | None:
+    def _load_checkpoint_payload(self) -> dict[str, Any] | None:
+        if not self.announcement_checkpoint_path.exists():
+            return None
+        try:
+            return json.loads(self.announcement_checkpoint_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+
+    def load_completed_announcement_date(self) -> date | None:
+        payload = self._load_checkpoint_payload()
+        if not payload:
+            return self.latest_successful_pull_date()
+
+        raw_value = payload.get("last_completed_announcement_date")
+        if not isinstance(raw_value, str):
+            return self.latest_successful_pull_date()
+        try:
+            return date.fromisoformat(raw_value)
+        except ValueError:
+            return self.latest_successful_pull_date()
+
+    def latest_successful_pull_date(self) -> date | None:
         if not self.runs_dir.exists():
             return None
 
@@ -88,15 +112,29 @@ class StateStore:
             if record.get("fatal_error") is not None:
                 continue
 
-            interval_end = record.get("interval_end")
-            if not isinstance(interval_end, str):
+            completed_papers = record.get("completed_papers")
+            try:
+                if int(completed_papers) <= 0:
+                    continue
+            except (TypeError, ValueError):
                 continue
 
+            raw_value = record.get("announcement_date") or record.get("run_date")
+            if not isinstance(raw_value, str):
+                continue
             try:
-                return datetime.fromisoformat(interval_end)
+                return date.fromisoformat(raw_value)
             except ValueError:
                 continue
         return None
+
+    def save_completed_announcement_date(self, announcement_date: date) -> Path:
+        payload = {
+            "last_completed_announcement_date": announcement_date.isoformat(),
+            "updated_at": _now_iso(),
+        }
+        _write_json(self.announcement_checkpoint_path, payload)
+        return self.announcement_checkpoint_path
 
     def save_paper_record(
         self,

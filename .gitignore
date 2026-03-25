@@ -21,3 +21,4 @@ user_preferences/*
 !user_preferences/defaults/**
 !user_preferences/templates/
 !user_preferences/templates/**
+.coverage

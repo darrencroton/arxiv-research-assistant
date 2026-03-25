@@ -1,8 +1,9 @@
-from datetime import date, timedelta, timezone
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 
 from re_ass.generation_service import GenerationError
+from re_ass.models import PreferenceConfig
 from re_ass.note_manager import NoteManager
 from re_ass.pipeline import run
 from re_ass.paper_identity import derive_identity
@@ -53,8 +54,12 @@ def _build_selection(candidates, *, selected=None):
 class FakeFetcher:
     last_call = None
 
-    def __init__(self, papers):
+    def __init__(self, papers, *, available_dates=None):
         self.papers = papers
+        self.available_dates = list(available_dates or [date(2026, 3, 22)])
+
+    def available_announcement_dates(self, _categories):
+        return tuple(self.available_dates)
 
     def collect_candidates(self, *_args, **kwargs):
         FakeFetcher.last_call = kwargs
@@ -117,12 +122,16 @@ class FakeRanker:
         )
 
 
+def _preferences() -> PreferenceConfig:
+    return PreferenceConfig(priorities=("Example priority",), categories=("astro-ph.GA",))
+
+
 def test_pipeline_returns_zero_and_writes_run_summary_when_no_new_papers(tmp_path: Path, monkeypatch) -> None:
     config = make_app_config(tmp_path)
-    monkeypatch.setattr("re_ass.pipeline.ArxivFetcher", lambda **_kwargs: FakeFetcher([]))
+    monkeypatch.setattr("re_ass.pipeline.ArxivFetcher", lambda **_kwargs: FakeFetcher([], available_dates=[date(2026, 3, 22)]))
     monkeypatch.setattr("re_ass.pipeline.PaperRanker", lambda **kwargs: FakeRanker(**kwargs))
     monkeypatch.setattr("re_ass.pipeline.GenerationService", lambda **_kwargs: FakeGenerationService())
-    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: _preferences())
 
     exit_code = run(config, date(2026, 3, 22))
 
@@ -138,12 +147,12 @@ def test_pipeline_continues_after_non_fatal_per_paper_failure(tmp_path: Path, mo
         make_paper(arxiv_id="2603.30001", title="Working Paper"),
         make_paper(arxiv_id="2603.30002", title="Broken Paper"),
     ]
-    monkeypatch.setattr("re_ass.pipeline.ArxivFetcher", lambda **_kwargs: FakeFetcher(papers))
+    monkeypatch.setattr("re_ass.pipeline.ArxivFetcher", lambda **_kwargs: FakeFetcher(papers, available_dates=[date(2026, 3, 24)]))
     monkeypatch.setattr(
         "re_ass.pipeline.PaperRanker",
         lambda **kwargs: FakeRanker(selection=_build_selection(papers, selected=papers), **kwargs),
     )
-    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: _preferences())
     monkeypatch.setattr("re_ass.pipeline.GenerationService", lambda **_kwargs: FakeGenerationService(failing_titles={"Broken Paper"}))
 
     exit_code = run(config, date(2026, 3, 24))
@@ -160,7 +169,7 @@ def test_pipeline_continues_after_non_fatal_per_paper_failure(tmp_path: Path, mo
 
 def test_pipeline_fails_hard_when_provider_construction_fails(tmp_path: Path, monkeypatch) -> None:
     config = make_app_config(tmp_path)
-    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: _preferences())
     monkeypatch.setattr("re_ass.pipeline.GenerationService", lambda **_kwargs: (_ for _ in ()).throw(ValueError("provider missing")))
 
     exit_code = run(config, date(2026, 3, 25))
@@ -183,9 +192,9 @@ def test_pipeline_writes_verbatim_summariser_note_output(tmp_path: Path, monkeyp
         "## References\n"
         '[^1]: "Quoted support" (Abstract, p.1)\n'
     )
-    monkeypatch.setattr("re_ass.pipeline.ArxivFetcher", lambda **_kwargs: FakeFetcher([paper]))
+    monkeypatch.setattr("re_ass.pipeline.ArxivFetcher", lambda **_kwargs: FakeFetcher([paper], available_dates=[date(2026, 3, 26)]))
     monkeypatch.setattr("re_ass.pipeline.PaperRanker", lambda **kwargs: FakeRanker(**kwargs))
-    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: _preferences())
     monkeypatch.setattr(
         "re_ass.pipeline.GenerationService",
         lambda **_kwargs: FakeGenerationService(note_content_by_title={"Verbatim Paper": raw_summary}),
@@ -200,14 +209,14 @@ def test_pipeline_writes_verbatim_summariser_note_output(tmp_path: Path, monkeyp
 
 def test_pipeline_leaves_papers_retryable_when_note_update_fails(tmp_path: Path, monkeypatch) -> None:
     class FailingNoteManager(NoteManager):
-        def update_daily_note(self, run_date, top_paper):
+        def update_daily_note(self, run_date, top_paper, *, reference_date=None):
             raise ValueError("broken daily template")
 
     config = make_app_config(tmp_path)
     paper = make_paper(arxiv_id="2603.30031", title="Retryable Paper")
-    monkeypatch.setattr("re_ass.pipeline.ArxivFetcher", lambda **_kwargs: FakeFetcher([paper]))
+    monkeypatch.setattr("re_ass.pipeline.ArxivFetcher", lambda **_kwargs: FakeFetcher([paper], available_dates=[date(2026, 3, 27)]))
     monkeypatch.setattr("re_ass.pipeline.PaperRanker", lambda **kwargs: FakeRanker(**kwargs))
-    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: _preferences())
     monkeypatch.setattr("re_ass.pipeline.GenerationService", lambda **_kwargs: FakeGenerationService())
     monkeypatch.setattr("re_ass.pipeline.NoteManager", FailingNoteManager)
 
@@ -219,21 +228,38 @@ def test_pipeline_leaves_papers_retryable_when_note_update_fails(tmp_path: Path,
     assert '"status": "note_written"' in record_path.read_text(encoding="utf-8")
 
 
-def test_pipeline_backfill_uses_stable_local_day_interval(tmp_path: Path, monkeypatch) -> None:
+def test_pipeline_auto_assigns_note_dates_ending_at_invocation_date(tmp_path: Path, monkeypatch) -> None:
     config = make_app_config(tmp_path)
-    paper = make_paper(arxiv_id="2603.30035", title="Interval Paper")
-    fixed_tz = timezone(timedelta(hours=11))
-    monkeypatch.setattr("re_ass.pipeline._local_timezone", lambda: fixed_tz)
-    monkeypatch.setattr("re_ass.pipeline.ArxivFetcher", lambda **_kwargs: FakeFetcher([paper]))
+    papers = [
+        make_paper(arxiv_id="2603.30035", title="Thursday Batch"),
+        make_paper(arxiv_id="2603.30036", title="Friday Batch"),
+        make_paper(arxiv_id="2603.30037", title="Monday Batch"),
+    ]
+
+    class SequencedFetcher(FakeFetcher):
+        def __init__(self):
+            super().__init__([], available_dates=[date(2026, 3, 20), date(2026, 3, 21), date(2026, 3, 24)])
+            self._papers_by_day = {
+                date(2026, 3, 20): [papers[0]],
+                date(2026, 3, 21): [papers[1]],
+                date(2026, 3, 24): [papers[2]],
+            }
+
+        def collect_candidates(self, *_args, **kwargs):
+            FakeFetcher.last_call = kwargs
+            return list(self._papers_by_day[kwargs["announcement_date"]])
+
+    monkeypatch.setattr("re_ass.pipeline.ArxivFetcher", lambda **_kwargs: SequencedFetcher())
     monkeypatch.setattr("re_ass.pipeline.PaperRanker", lambda **kwargs: FakeRanker(**kwargs))
-    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: _preferences())
     monkeypatch.setattr("re_ass.pipeline.GenerationService", lambda **_kwargs: FakeGenerationService())
 
-    exit_code = run(config, date(2026, 3, 23), backfill=True)
+    exit_code = run(config, date(2026, 3, 25))
 
     assert exit_code == 0
-    assert FakeFetcher.last_call["start"].isoformat() == "2026-03-22T13:00:00+00:00"
-    assert FakeFetcher.last_call["end"].isoformat() == "2026-03-23T13:00:00+00:00"
+    assert "Thursday Batch" in (config.daily_notes_dir / "2026-03-23.md").read_text(encoding="utf-8")
+    assert "Friday Batch" in (config.daily_notes_dir / "2026-03-24.md").read_text(encoding="utf-8")
+    assert "Monday Batch" in (config.daily_notes_dir / "2026-03-25.md").read_text(encoding="utf-8")
 
 
 def test_pipeline_backfill_leaves_current_weekly_summary_unchanged(tmp_path: Path, monkeypatch) -> None:
@@ -258,9 +284,9 @@ def test_pipeline_backfill_leaves_current_weekly_summary_unchanged(tmp_path: Pat
         encoding="utf-8",
     )
     paper = make_paper(arxiv_id="2603.30041", title="Backfill Paper")
-    monkeypatch.setattr("re_ass.pipeline.ArxivFetcher", lambda **_kwargs: FakeFetcher([paper]))
+    monkeypatch.setattr("re_ass.pipeline.ArxivFetcher", lambda **_kwargs: FakeFetcher([paper], available_dates=[date(2026, 3, 23)]))
     monkeypatch.setattr("re_ass.pipeline.PaperRanker", lambda **kwargs: FakeRanker(**kwargs))
-    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: _preferences())
     monkeypatch.setattr("re_ass.pipeline.GenerationService", lambda **_kwargs: FakeGenerationService())
 
     exit_code = run(config, date(2026, 3, 23), backfill=True)
@@ -281,9 +307,9 @@ def test_pipeline_backfill_renders_daily_template_for_target_date(tmp_path: Path
         encoding="utf-8",
     )
     paper = make_paper(arxiv_id="2603.30036", title="Backfill Template Paper")
-    monkeypatch.setattr("re_ass.pipeline.ArxivFetcher", lambda **_kwargs: FakeFetcher([paper]))
+    monkeypatch.setattr("re_ass.pipeline.ArxivFetcher", lambda **_kwargs: FakeFetcher([paper], available_dates=[date(2026, 3, 23)]))
     monkeypatch.setattr("re_ass.pipeline.PaperRanker", lambda **kwargs: FakeRanker(**kwargs))
-    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: _preferences())
     monkeypatch.setattr("re_ass.pipeline.GenerationService", lambda **_kwargs: FakeGenerationService())
 
     exit_code = run(config, date(2026, 3, 23), backfill=True)
@@ -310,9 +336,9 @@ def test_pipeline_regenerates_weekly_synthesis_from_full_week_context(tmp_path: 
     )
     paper = make_paper(arxiv_id="2603.30061", title="Wednesday Paper")
     generation_service = FakeGenerationService()
-    monkeypatch.setattr("re_ass.pipeline.ArxivFetcher", lambda **_kwargs: FakeFetcher([paper]))
+    monkeypatch.setattr("re_ass.pipeline.ArxivFetcher", lambda **_kwargs: FakeFetcher([paper], available_dates=[date(2026, 3, 25)]))
     monkeypatch.setattr("re_ass.pipeline.PaperRanker", lambda **kwargs: FakeRanker(**kwargs))
-    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: _preferences())
     monkeypatch.setattr("re_ass.pipeline.GenerationService", lambda **_kwargs: generation_service)
 
     exit_code = run(config, date(2026, 3, 25))
@@ -335,24 +361,26 @@ def test_pipeline_regenerates_weekly_synthesis_from_full_week_context(tmp_path: 
     ]
 
 
-def test_pipeline_records_interval_and_ranking_diagnostics(tmp_path: Path, monkeypatch) -> None:
+def test_pipeline_records_announcement_and_ranking_diagnostics(tmp_path: Path, monkeypatch) -> None:
     config = make_app_config(tmp_path)
     papers = [
         make_paper(arxiv_id="2603.30051", title="Ranked One"),
         make_paper(arxiv_id="2603.30052", title="Ranked Two"),
     ]
     selection = _build_selection(papers, selected=papers[:1])
-    monkeypatch.setattr("re_ass.pipeline.ArxivFetcher", lambda **_kwargs: FakeFetcher(papers))
+    monkeypatch.setattr("re_ass.pipeline.ArxivFetcher", lambda **_kwargs: FakeFetcher(papers, available_dates=[date(2026, 3, 28)]))
     monkeypatch.setattr("re_ass.pipeline.PaperRanker", lambda **kwargs: FakeRanker(selection=selection, **kwargs))
-    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: _preferences())
     monkeypatch.setattr("re_ass.pipeline.GenerationService", lambda **_kwargs: FakeGenerationService())
 
     exit_code = run(config, date(2026, 3, 28))
 
     assert exit_code == 0
     summary_text = next(config.state_runs_dir.glob("*.json")).read_text(encoding="utf-8")
-    assert '"interval_start"' in summary_text
-    assert '"interval_end"' in summary_text
+    assert '"announcement_date": "2026-03-28"' in summary_text
+    assert '"note_date": "2026-03-28"' in summary_text
+    assert '"available_announcement_dates"' in summary_text
+    assert '"visible_window_start": "2026-03-28"' in summary_text
     assert '"candidate_count": 2' in summary_text
     assert '"max_papers": 10' in summary_text
     assert '"min_selection_score": 75.0' in summary_text
@@ -363,9 +391,9 @@ def test_pipeline_records_interval_and_ranking_diagnostics(tmp_path: Path, monke
 def test_pipeline_uses_configured_max_papers_for_selection_cap(tmp_path: Path, monkeypatch) -> None:
     config = make_app_config(tmp_path, max_papers=5)
     papers = [make_paper(arxiv_id=f"2603.30{index:03d}", title=f"Paper {index}") for index in range(1, 7)]
-    monkeypatch.setattr("re_ass.pipeline.ArxivFetcher", lambda **_kwargs: FakeFetcher(papers))
+    monkeypatch.setattr("re_ass.pipeline.ArxivFetcher", lambda **_kwargs: FakeFetcher(papers, available_dates=[date(2026, 3, 29)]))
     monkeypatch.setattr("re_ass.pipeline.PaperRanker", lambda **kwargs: FakeRanker(**kwargs))
-    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: _preferences())
     monkeypatch.setattr("re_ass.pipeline.GenerationService", lambda **_kwargs: FakeGenerationService())
 
     exit_code = run(config, date(2026, 3, 29))

@@ -6,6 +6,7 @@ from datetime import date, timedelta
 from pathlib import Path
 import re
 import shutil
+from urllib.parse import quote
 
 import pendulum
 
@@ -205,6 +206,13 @@ def _replace_weekly_title(text: str, title: str) -> str:
     return f"{title}\n\n{text.lstrip()}"
 
 
+def _first_heading(text: str) -> str | None:
+    for line in text.splitlines():
+        if line.startswith("# "):
+            return line.strip()
+    return None
+
+
 def _render_daily_template(template: str, run_date: date) -> str:
     render_date = pendulum.datetime(run_date.year, run_date.month, run_date.day, tz="UTC")
 
@@ -251,44 +259,88 @@ class NoteManager:
     def weekly_note_path(self) -> Path:
         return self.config.weekly_notes_dir / self.config.weekly_note_file
 
+    def _archive_anchor_date(self, note_date: date) -> date:
+        return _week_start(note_date, self.config.rotation_day) + timedelta(days=7)
+
+    def archived_weekly_note_path(self, note_date: date) -> Path:
+        archive_name = self.config.archive_name_pattern.format(date=self._archive_anchor_date(note_date).isoformat())
+        return self.config.weekly_notes_dir / archive_name
+
+    def weekly_note_path_for(self, note_date: date, reference_date: date) -> Path:
+        if _week_start(note_date, self.config.rotation_day) == _week_start(reference_date, self.config.rotation_day):
+            return self.weekly_note_path
+        return self.archived_weekly_note_path(note_date)
+
+    def _weekly_note_link(self, note_date: date, reference_date: date) -> str:
+        file_name = self.weekly_note_path_for(note_date, reference_date).name
+        file_stem = Path(file_name).stem
+        if self.config.link_style == "wikilink":
+            return f"[[{file_stem}|See all of this week's arXiv papers]]"
+        encoded_name = quote(file_name)
+        return f"[See all of this week's arXiv papers](../weekly-notes/{encoded_name})"
+
+    def _render_weekly_template(self, note_date: date) -> str:
+        template_text = self.config.weekly_template.read_text(encoding="utf-8")
+        return _replace_weekly_title(template_text, _weekly_title(note_date, self.config.rotation_day))
+
+    def _load_weekly_note_text(self, note_date: date, reference_date: date) -> str:
+        weekly_path = self.weekly_note_path_for(note_date, reference_date)
+        if weekly_path.exists():
+            return weekly_path.read_text(encoding="utf-8")
+        return self._render_weekly_template(note_date)
+
     def rotate_weekly_note_if_needed(self, run_date: date) -> bool:
         self.ensure_weekly_note_exists()
-        if run_date.weekday() != _ROTATION_DAYS[self.config.rotation_day]:
-            return False
-
-        archive_name = self.config.archive_name_pattern.format(date=run_date.isoformat())
-        archive_path = self.config.weekly_notes_dir / archive_name
-        if archive_path.exists():
-            return False
-
+        archive_path = self.config.weekly_notes_dir / self.config.archive_name_pattern.format(
+            date=_week_start(run_date, self.config.rotation_day).isoformat()
+        )
         weekly_text = self.weekly_note_path.read_text(encoding="utf-8")
         template_text = self.config.weekly_template.read_text(encoding="utf-8")
         if weekly_text.strip() == template_text.strip():
             return False
+        if _first_heading(weekly_text) == _weekly_title(run_date, self.config.rotation_day):
+            return False
 
-        shutil.move(str(self.weekly_note_path), str(archive_path))
+        if not archive_path.exists():
+            shutil.move(str(self.weekly_note_path), str(archive_path))
         shutil.copyfile(self.config.weekly_template, self.weekly_note_path)
         return True
 
-    def read_weekly_synthesis(self) -> str:
-        text = self.ensure_weekly_note_exists().read_text(encoding="utf-8")
+    def read_weekly_synthesis(self, note_date: date, *, reference_date: date | None = None) -> str:
+        reference_date = reference_date or note_date
+        text = self._load_weekly_note_text(note_date, reference_date)
         return _read_section(text, self.config.weekly_synthesis_heading)
 
-    def read_weekly_additions(self) -> str:
-        text = self.ensure_weekly_note_exists().read_text(encoding="utf-8")
+    def read_weekly_additions(self, note_date: date, *, reference_date: date | None = None) -> str:
+        reference_date = reference_date or note_date
+        text = self._load_weekly_note_text(note_date, reference_date)
         return _read_section(text, self.config.weekly_additions_heading)
 
-    def preview_weekly_additions(self, run_date: date, papers: list[ProcessedPaper]) -> str:
-        existing_additions = self.read_weekly_additions()
-        return _build_weekly_additions(existing_additions, run_date, papers, link_style=self.config.link_style)
+    def preview_weekly_additions(
+        self,
+        note_date: date,
+        papers: list[ProcessedPaper],
+        *,
+        reference_date: date | None = None,
+    ) -> str:
+        reference_date = reference_date or note_date
+        existing_additions = self.read_weekly_additions(note_date, reference_date=reference_date)
+        return _build_weekly_additions(existing_additions, note_date, papers, link_style=self.config.link_style)
 
-    def update_daily_note(self, run_date: date, top_paper: ProcessedPaper) -> Path:
-        daily_path = self.config.daily_notes_dir / f"{run_date.isoformat()}.md"
+    def update_daily_note(
+        self,
+        note_date: date,
+        top_paper: ProcessedPaper,
+        *,
+        reference_date: date | None = None,
+    ) -> Path:
+        reference_date = reference_date or note_date
+        daily_path = self.config.daily_notes_dir / f"{note_date.isoformat()}.md"
         if daily_path.exists():
             text = daily_path.read_text(encoding="utf-8")
         else:
             template = self.config.daily_template.read_text(encoding="utf-8")
-            text = _render_daily_template(template, run_date)
+            text = _render_daily_template(template, note_date)
 
         link = render_link(
             top_paper.filename_stem,
@@ -302,21 +354,30 @@ class NoteManager:
                 "",
                 f"**Summary:** {top_paper.micro_summary}",
                 "",
-                "[[this-weeks-arxiv-papers|See all of this week's arXiv papers]]",
+                self._weekly_note_link(note_date, reference_date),
             ]
         )
         updated = _replace_section(text, self.config.daily_top_paper_heading, block)
         daily_path.write_text(updated.rstrip() + "\n", encoding="utf-8")
         return daily_path
 
-    def update_weekly_note(self, run_date: date, papers: list[ProcessedPaper], synthesis: str) -> Path:
-        weekly_path = self.ensure_weekly_note_exists()
-        text = weekly_path.read_text(encoding="utf-8")
-        updated = _replace_weekly_title(text, _weekly_title(run_date, self.config.rotation_day))
+    def update_weekly_note(
+        self,
+        note_date: date,
+        papers: list[ProcessedPaper],
+        synthesis: str,
+        *,
+        reference_date: date | None = None,
+    ) -> Path:
+        reference_date = reference_date or note_date
+        weekly_path = self.weekly_note_path_for(note_date, reference_date)
+        text = self._load_weekly_note_text(note_date, reference_date)
+        updated = _replace_weekly_title(text, _weekly_title(note_date, self.config.rotation_day))
         updated = _replace_section(updated, self.config.weekly_synthesis_heading, synthesis.strip())
         existing_additions = _read_section(updated, self.config.weekly_additions_heading)
-        additions = _build_weekly_additions(existing_additions, run_date, papers, link_style=self.config.link_style)
+        additions = _build_weekly_additions(existing_additions, note_date, papers, link_style=self.config.link_style)
         updated = _replace_section(updated, self.config.weekly_additions_heading, additions)
 
+        weekly_path.parent.mkdir(parents=True, exist_ok=True)
         weekly_path.write_text(updated.rstrip() + "\n", encoding="utf-8")
         return weekly_path

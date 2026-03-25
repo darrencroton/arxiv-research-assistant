@@ -140,7 +140,7 @@ state/papers/
 
 - `launchd` uses your Mac's local timezone.
 - If your Mac is asleep when a run is due, `launchd` coalesces missed calendar events and runs the job after wake.
-- `re-ass` tracks prior successful runs, so scheduled runs continue from the previous successful interval rather than reprocessing the whole history.
+- `re-ass` tracks the last completed arXiv announcement day, so scheduled runs pick up the next visible announcement batch instead of relying on a rolling time window.
 - If you reinstall or move the provider CLI binary, or your PATH changes, rerun `./scripts/launchd/render-plist.sh` and reinstall the LaunchAgent so the updated PATH is captured.
 
 ## Updating or removing the job

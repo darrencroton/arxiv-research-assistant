@@ -31,17 +31,6 @@ class ArxivPaper:
     published: datetime
     updated: datetime | None = None
 
-    @property
-    def searchable_text(self) -> str:
-        parts = [
-            self.title,
-            self.summary,
-            " ".join(self.authors),
-            self.primary_category,
-            " ".join(self.categories),
-        ]
-        return " ".join(part for part in parts if part).lower()
-
 
 @dataclass(frozen=True, slots=True)
 class ProcessedPaper:

@@ -27,6 +27,7 @@ re_ass = "re_ass.main:cli"
 [dependency-groups]
 dev = [
   "pytest>=8.4.1,<9",
+  "pytest-cov>=6.2.1,<7",
 ]
 
 [tool.hatch.build.targets.wheel]

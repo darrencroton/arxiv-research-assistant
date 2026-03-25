@@ -196,3 +196,17 @@ def test_update_notes_uses_configured_managed_headings(tmp_path: Path) -> None:
     assert "Custom synthesis." in weekly_text
     assert "## Weekly Additions" in weekly_text
     assert "### Monday 23rd" in weekly_text
+
+
+def test_update_daily_note_links_to_archived_weekly_note_for_catch_up_days(tmp_path: Path) -> None:
+    manager = NoteManager(make_app_config(tmp_path))
+    manager.bootstrap()
+
+    manager.update_daily_note(
+        date(2026, 3, 21),
+        make_processed_paper(tmp_path, micro_summary="Catch-up summary."),
+        reference_date=date(2026, 3, 25),
+    )
+
+    daily_text = (manager.config.daily_notes_dir / "2026-03-21.md").read_text(encoding="utf-8")
+    assert "[[2026-03-23-weekly-arxiv|See all of this week's arXiv papers]]" in daily_text

@@ -118,9 +118,10 @@ uv run re-ass
 
 This should:
 
-- fetch new arXiv candidates for the current interval
+- discover unprocessed arXiv announcement days from the recent category listings
+- fetch that day's candidates across all configured categories, then rank them as one combined pool
 - rank and summarise the selected papers
-- write or update the daily note
+- write or update the daily note ending at today, with catch-up days filling earlier note dates if needed
 - write or update the rolling weekly note
 - write diagnostics under `state/runs/`
 
@@ -130,7 +131,7 @@ Backfill a specific day:
 uv run re-ass --date 2026-03-21
 ```
 
-An explicit `--date` backfill updates that day's outputs without rotating the current weekly note.
+An explicit `--date` backfill processes that announcement day directly without rotating the current weekly note.
 
 ## Directory Layout
 
@@ -154,6 +155,14 @@ user_preferences/
 ```
 
 `state/papers/` is the authoritative completion record. Existing notes or PDFs alone do not mark a paper as completed.
+
+Automatic runs are driven by arXiv announcement days, not by a rolling timestamp cursor:
+
+- each configured category is discovered separately from its recent arXiv listing
+- cross-listed papers are deduplicated by arXiv ID
+- all candidates for an announcement day are ranked together in one pass
+- if `re-ass` was down, the next run can catch up on the visible missed announcement days in order
+- automatic catch-up fills daily notes from the current run day backwards
 
 ## Ranking and Selection
 

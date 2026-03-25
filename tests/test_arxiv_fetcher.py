@@ -1,143 +1,186 @@
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
-from re_ass.arxiv_fetcher import ArxivFetcher, build_category_query, filter_papers_between
+from re_ass.arxiv_fetcher import ArxivFetcher
 from re_ass.models import PreferenceConfig
-from re_ass.paper_identity import derive_identity
-from tests.support import make_paper
 
 
-def test_build_category_query_joins_categories() -> None:
-    assert build_category_query(("cs.AI", "cs.CL")) == "cat:cs.AI OR cat:cs.CL"
+def _listing_html(*, heading: str, ids: list[str]) -> str:
+    blocks = []
+    for source_id in ids:
+        blocks.append(
+            f"""
+            <dt>
+              <a href="/abs/{source_id}" title="Abstract" id="{source_id}">
+                arXiv:{source_id}
+              </a>
+            </dt>
+            """
+        )
+    joined = "\n".join(blocks)
+    return f"<div id='dlpage'><dl id='articles'><h3>{heading}</h3>{joined}</dl></div>"
 
 
-def test_filter_papers_between_respects_start_and_end_bounds() -> None:
-    start = datetime(2026, 3, 20, 12, 0, tzinfo=timezone.utc)
-    end = datetime(2026, 3, 21, 12, 0, tzinfo=timezone.utc)
-    papers = [
-        make_paper(arxiv_id="2603.10001", title="Inside Window", published=start + timedelta(hours=6)),
-        make_paper(arxiv_id="2603.10002", title="Too Old", published=start - timedelta(hours=6)),
-        make_paper(arxiv_id="2603.10003", title="Future Paper", published=end + timedelta(hours=1)),
-    ]
+def test_available_announcement_dates_unions_configured_categories() -> None:
+    listing_html_by_category = {
+        "cs.AI": _listing_html(heading="Mon, 23 Mar 2026 (showing 1 of 1 entries )", ids=["2603.10021"]),
+        "cs.CL": _listing_html(heading="Tue, 24 Mar 2026 (showing 1 of 1 entries )", ids=["2603.10022"]),
+    }
 
-    recent = filter_papers_between(papers, start=start, end=end)
+    fetcher = ArxivFetcher(
+        page_size=10,
+        client=SimpleNamespace(results=lambda _search: []),
+        listing_fetcher=lambda category: listing_html_by_category[category],
+    )
 
-    assert [paper.title for paper in recent] == ["Inside Window"]
+    assert fetcher.available_announcement_dates(("cs.AI", "cs.CL")) == (
+        date(2026, 3, 23),
+        date(2026, 3, 24),
+    )
 
 
-def test_collect_candidates_fetches_all_in_range_results_across_categories() -> None:
-    now = datetime(2026, 3, 21, 12, 0, tzinfo=timezone.utc)
-    results = [
-        SimpleNamespace(
-            title="Too New",
-            summary="Outside the end bound.",
-            entry_id="https://arxiv.org/abs/2603.10020",
-            authors=[SimpleNamespace(name="Test Author")],
-            primary_category="cs.AI",
-            categories=("cs.AI",),
-            published=now + timedelta(hours=1),
-            updated=now + timedelta(hours=1),
-        ),
-        SimpleNamespace(
+def test_collect_candidates_fetches_all_listing_ids_for_announcement_date() -> None:
+    announcement_day = date(2026, 3, 24)
+    listing_html_by_category = {
+        "cs.AI": _listing_html(heading="Tue, 24 Mar 2026 (showing 2 of 2 entries )", ids=["2603.10021", "2603.10022"]),
+        "cs.CL": _listing_html(heading="Tue, 24 Mar 2026 (showing 2 of 2 entries )", ids=["2603.10022", "2603.10023"]),
+    }
+    results_by_id = {
+        "2603.10021": SimpleNamespace(
             title="In Range One",
             summary="Agents and tools.",
             entry_id="https://arxiv.org/abs/2603.10021",
             authors=[SimpleNamespace(name="Test Author")],
             primary_category="cs.AI",
             categories=("cs.AI",),
-            published=now - timedelta(hours=1),
-            updated=now - timedelta(hours=1),
+            published=datetime(2026, 3, 24, 11, 0, tzinfo=timezone.utc),
+            updated=datetime(2026, 3, 24, 11, 0, tzinfo=timezone.utc),
         ),
-        SimpleNamespace(
+        "2603.10022": SimpleNamespace(
             title="In Range Two",
             summary="Language models.",
             entry_id="https://arxiv.org/abs/2603.10022",
             authors=[SimpleNamespace(name="Test Author")],
             primary_category="cs.CL",
             categories=("cs.CL",),
-            published=now - timedelta(hours=2),
-            updated=now - timedelta(hours=2),
+            published=datetime(2026, 3, 24, 10, 0, tzinfo=timezone.utc),
+            updated=datetime(2026, 3, 24, 10, 0, tzinfo=timezone.utc),
         ),
-        SimpleNamespace(
-            title="Too Old",
-            summary="Outside the start bound.",
+        "2603.10023": SimpleNamespace(
+            title="In Range Three",
+            summary="Planning agents.",
             entry_id="https://arxiv.org/abs/2603.10023",
             authors=[SimpleNamespace(name="Test Author")],
-            primary_category="cs.CL",
-            categories=("cs.CL",),
-            published=now - timedelta(days=2),
-            updated=now - timedelta(days=2),
+            primary_category="cs.AI",
+            categories=("cs.AI",),
+            published=datetime(2026, 3, 24, 9, 0, tzinfo=timezone.utc),
+            updated=datetime(2026, 3, 24, 9, 0, tzinfo=timezone.utc),
         ),
-    ]
+    }
 
     class FakeClient:
         def __init__(self) -> None:
             self.searches = []
 
-        def results(self, _search: object):
-            self.searches.append(_search)
-            return results
+        def results(self, search: object):
+            self.searches.append(search)
+            return [results_by_id[source_id] for source_id in search.id_list]
 
     client = FakeClient()
-
     fetcher = ArxivFetcher(
-        page_size=1,
+        page_size=10,
         client=client,
+        listing_fetcher=lambda category: listing_html_by_category[category],
     )
 
     papers = fetcher.collect_candidates(
         PreferenceConfig(priorities=("Agents",), categories=("cs.AI", "cs.CL")),
-        start=now - timedelta(hours=3),
-        end=now,
+        announcement_date=announcement_day,
     )
 
-    assert [paper.title for paper in papers] == ["In Range One", "In Range Two"]
-    assert client.searches[0].query == "cat:cs.AI OR cat:cs.CL"
+    assert [paper.title for paper in papers] == ["In Range One", "In Range Two", "In Range Three"]
+    assert client.searches[0].id_list == ["2603.10021", "2603.10022", "2603.10023"]
 
 
-def test_collect_candidates_skips_completed_paper_keys() -> None:
-    now = datetime(2026, 3, 21, 12, 0, tzinfo=timezone.utc)
-    results = [
-        SimpleNamespace(
-            title="Existing Agents Paper",
-            summary="Agents and planning.",
-            entry_id="https://arxiv.org/abs/2603.10031",
-            authors=[SimpleNamespace(name="Author One")],
-            primary_category="cs.AI",
-            categories=("cs.AI",),
-            published=now - timedelta(hours=48),
-            updated=now - timedelta(hours=48),
-        ),
-        SimpleNamespace(
+def test_collect_candidates_skips_completed_paper_keys_before_metadata_fetch() -> None:
+    announcement_day = date(2026, 3, 24)
+    listing_html_by_category = {
+        "cs.AI": _listing_html(heading="Tue, 24 Mar 2026 (showing 2 of 2 entries )", ids=["2603.10031", "2603.10032"]),
+    }
+    results_by_id = {
+        "2603.10032": SimpleNamespace(
             title="Fresh Agents Paper",
             summary="Agents and execution.",
             entry_id="https://arxiv.org/abs/2603.10032",
             authors=[SimpleNamespace(name="Author Two")],
             primary_category="cs.AI",
             categories=("cs.AI",),
-            published=now - timedelta(hours=49),
-            updated=now - timedelta(hours=49),
+            published=datetime(2026, 3, 24, 9, 0, tzinfo=timezone.utc),
+            updated=datetime(2026, 3, 24, 9, 0, tzinfo=timezone.utc),
         ),
-    ]
+    }
 
     class FakeClient:
-        def results(self, _search: object):
-            return results
+        def __init__(self) -> None:
+            self.searches = []
 
-    excluded_key = derive_identity(
-        make_paper(arxiv_id="2603.10031", title="Existing Agents Paper", summary="Agents and planning.", authors=("Author One",))
-    ).paper_key
+        def results(self, search: object):
+            self.searches.append(search)
+            return [results_by_id[source_id] for source_id in search.id_list]
 
+    client = FakeClient()
     fetcher = ArxivFetcher(
         page_size=10,
-        client=FakeClient(),
+        client=client,
+        listing_fetcher=lambda category: listing_html_by_category[category],
     )
 
     papers = fetcher.collect_candidates(
         PreferenceConfig(priorities=("Agents",), categories=("cs.AI",)),
-        start=now - timedelta(days=3),
-        end=now,
-        excluded_paper_keys={excluded_key},
+        announcement_date=announcement_day,
+        excluded_paper_keys={"arxiv:2603.10031"},
     )
 
     assert [paper.title for paper in papers] == ["Fresh Agents Paper"]
+    assert client.searches[0].id_list == ["2603.10032"]
+
+
+def test_collect_candidates_returns_empty_when_all_listing_ids_are_already_completed() -> None:
+    announcement_day = date(2026, 3, 24)
+    fetcher = ArxivFetcher(
+        page_size=10,
+        client=SimpleNamespace(results=lambda _search: (_ for _ in ()).throw(AssertionError("API should not be called"))),
+        listing_fetcher=lambda _category: _listing_html(
+            heading="Tue, 24 Mar 2026 (showing 1 of 1 entries )",
+            ids=["2603.10040"],
+        ),
+    )
+
+    papers = fetcher.collect_candidates(
+        PreferenceConfig(priorities=("Agents",), categories=("cs.AI",)),
+        announcement_date=announcement_day,
+        excluded_paper_keys={"arxiv:2603.10040"},
+    )
+
+    assert papers == []
+
+
+def test_collect_candidates_raises_for_announcement_date_outside_visible_listing() -> None:
+    fetcher = ArxivFetcher(
+        page_size=10,
+        client=SimpleNamespace(results=lambda _search: []),
+        listing_fetcher=lambda _category: _listing_html(
+            heading="Tue, 24 Mar 2026 (showing 1 of 1 entries )",
+            ids=["2603.10050"],
+        ),
+    )
+
+    try:
+        fetcher.collect_candidates(
+            PreferenceConfig(priorities=("Agents",), categories=("cs.AI",)),
+            announcement_date=date(2026, 3, 25),
+        )
+    except ValueError as error:
+        assert "2026-03-25" in str(error)
+    else:
+        raise AssertionError("Expected collect_candidates to reject an unavailable announcement date.")
