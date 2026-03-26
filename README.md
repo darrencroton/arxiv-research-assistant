@@ -123,7 +123,7 @@ This should:
 - rank and summarise the selected papers
 - write or update the daily note ending at today, with catch-up days filling earlier note dates if needed
 - write or update the rolling weekly note
-- write diagnostics under `state/runs/`
+- write one diagnostic JSON per processed announcement day under `state/runs/`
 
 Backfill a specific day:
 
@@ -163,6 +163,7 @@ Automatic runs are driven by arXiv announcement days, not by a rolling timestamp
 - all candidates for an announcement day are ranked together in one pass
 - if `re-ass` was down, the next run can catch up on the visible missed announcement days in order
 - automatic catch-up fills daily notes from the current run day backwards
+- archived weekly notes are keyed by the week they describe, so catch-up days link back to the correct week file
 
 ## Ranking and Selection
 

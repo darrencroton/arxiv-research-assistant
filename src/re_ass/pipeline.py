@@ -90,11 +90,17 @@ def _cleanup_path(path: Path | None) -> None:
         path.unlink()
 
 
-def _bootstrap_runtime(config: AppConfig, note_manager: NoteManager, state_store: StateStore) -> None:
+def _bootstrap_runtime(
+    config: AppConfig,
+    note_manager: NoteManager,
+    state_store: StateStore,
+    *,
+    reference_date: date,
+) -> None:
     config.output_root.mkdir(parents=True, exist_ok=True)
     config.pdfs_dir.mkdir(parents=True, exist_ok=True)
     config.logs_root.mkdir(parents=True, exist_ok=True)
-    note_manager.bootstrap()
+    note_manager.bootstrap(reference_date)
     state_store.bootstrap()
 
 
@@ -385,7 +391,7 @@ def _run_announcement_day(
 
         run_summary["completed_papers"] = len(successful_papers)
         run_summary["failed_papers"] = len(run_summary["failed_keys"])
-        state_store.save_run_summary(invocation_date.isoformat(), run_summary)
+        state_store.save_run_summary(run_summary, label=f"announcement-{announcement_date.isoformat()}")
         state_store.save_completed_announcement_date(announcement_date)
         return 0
     except Exception as error:
@@ -393,7 +399,7 @@ def _run_announcement_day(
         run_summary["fatal_error"] = str(error)
         run_summary["failed_papers"] = len(run_summary["failed_keys"])
         run_summary["completed_papers"] = len(run_summary["completed_keys"])
-        state_store.save_run_summary(invocation_date.isoformat(), run_summary)
+        state_store.save_run_summary(run_summary, label=f"announcement-{announcement_date.isoformat()}-fatal")
         return 1
 
 
@@ -406,7 +412,7 @@ def run(config: AppConfig, run_date: date | None = None, *, backfill: bool = Fal
     overall_summary = _run_summary_base(invocation_date)
 
     try:
-        _bootstrap_runtime(config, note_manager, state_store)
+        _bootstrap_runtime(config, note_manager, state_store, reference_date=invocation_date)
         if not backfill:
             note_manager.rotate_weekly_note_if_needed(invocation_date)
 
@@ -439,7 +445,7 @@ def run(config: AppConfig, run_date: date | None = None, *, backfill: bool = Fal
 
         if not pending_dates:
             LOGGER.info("No new announcement day is available to process.")
-            state_store.save_run_summary(invocation_date.isoformat(), overall_summary)
+            state_store.save_run_summary(overall_summary, label="overall")
             return 0
 
         for announcement_date in pending_dates:
@@ -465,5 +471,5 @@ def run(config: AppConfig, run_date: date | None = None, *, backfill: bool = Fal
     except Exception as error:
         LOGGER.exception("Fatal pipeline error for %s", invocation_date.isoformat())
         overall_summary["fatal_error"] = str(error)
-        state_store.save_run_summary(invocation_date.isoformat(), overall_summary)
+        state_store.save_run_summary(overall_summary, label="overall-fatal")
         return 1

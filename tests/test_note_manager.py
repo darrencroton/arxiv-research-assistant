@@ -159,10 +159,47 @@ def test_rotate_weekly_note_archives_previous_note_on_rotation_day(tmp_path: Pat
 
     rotated = manager.rotate_weekly_note_if_needed(date(2026, 3, 23))
 
-    archived = manager.config.weekly_notes_dir / "2026-03-23-weekly-arxiv.md"
+    archived = manager.config.weekly_notes_dir / "2026-03-16-weekly-arxiv.md"
     assert rotated is True
     assert archived.exists()
     assert "Old synthesis." in archived.read_text(encoding="utf-8")
+
+
+def test_catch_up_writes_the_target_week_without_reusing_a_stale_archive(tmp_path: Path) -> None:
+    manager = NoteManager(make_app_config(tmp_path))
+    manager.bootstrap(reference_date=date(2026, 3, 25))
+    manager.weekly_note_path.write_text(
+        "# ARXIV PAPERS FOR THE WEEK 9th - 13th March 2026\n"
+        "<!-- re-ass-week-start: 2026-03-09 -->\n\n"
+        "## SYNTHESIS\n\n"
+        "Old synthesis.\n\n"
+        "---\n"
+        "## DAILY ADDITIONS\n\n"
+        "### Tuesday 10th\n\n"
+        "**Title:** [[Old Paper]]\n\n"
+        "**Summary:** Old summary.\n",
+        encoding="utf-8",
+    )
+
+    rotated = manager.rotate_weekly_note_if_needed(date(2026, 3, 25))
+    archived_stale_week = manager.config.weekly_notes_dir / "2026-03-09-weekly-arxiv.md"
+    assert rotated is True
+    assert archived_stale_week.exists()
+
+    manager.update_weekly_note(
+        date(2026, 3, 17),
+        [make_processed_paper(tmp_path, micro_summary="Catch-up summary.")],
+        "Fresh synthesis.",
+        reference_date=date(2026, 3, 25),
+    )
+
+    catch_up_week = manager.config.weekly_notes_dir / "2026-03-16-weekly-arxiv.md"
+    catch_up_text = catch_up_week.read_text(encoding="utf-8")
+    assert catch_up_week.exists()
+    assert catch_up_text.startswith("# ARXIV PAPERS FOR THE WEEK 16th - 20th March 2026")
+    assert "Catch-up summary." in catch_up_text
+    assert "### Tuesday 10th" not in catch_up_text
+    assert "Old summary." not in catch_up_text
 
 
 def test_update_notes_uses_configured_managed_headings(tmp_path: Path) -> None:
@@ -209,4 +246,4 @@ def test_update_daily_note_links_to_archived_weekly_note_for_catch_up_days(tmp_p
     )
 
     daily_text = (manager.config.daily_notes_dir / "2026-03-21.md").read_text(encoding="utf-8")
-    assert "[[2026-03-23-weekly-arxiv|See all of this week's arXiv papers]]" in daily_text
+    assert "[[2026-03-16-weekly-arxiv|See all of this week's arXiv papers]]" in daily_text

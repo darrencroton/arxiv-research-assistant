@@ -24,8 +24,18 @@ _ROTATION_DAYS = {
     "saturday": 5,
     "sunday": 6,
 }
+_WEEKLY_TITLE_PREFIX = "# ARXIV PAPERS FOR THE WEEK"
 
 _DAILY_TEMPLATE_DATE_PATTERN = re.compile(r"\{\{\s*date(?:\s*:\s*([^}]+?))?\s*\}\}")
+_WEEK_START_MARKER_RE = re.compile(r"(?m)^<!--\s*re-ass-week-start:\s*(?P<date>\d{4}-\d{2}-\d{2})\s*-->\s*$")
+_WEEK_TITLE_RE = re.compile(
+    rf"^{re.escape(_WEEKLY_TITLE_PREFIX)} "
+    r"(?P<start_day>\d{1,2})(?:st|nd|rd|th)"
+    r"(?: (?P<start_month>[A-Za-z]+)(?: (?P<start_year>\d{4}))?)?"
+    r" - "
+    r"(?P<end_day>\d{1,2})(?:st|nd|rd|th) "
+    r"(?P<end_month>[A-Za-z]+) (?P<end_year>\d{4})$"
+)
 
 
 def _find_heading_line(lines: list[str], heading: str) -> int | None:
@@ -194,7 +204,7 @@ def _format_week_range(run_date: date, rotation_day: str) -> str:
 
 
 def _weekly_title(run_date: date, rotation_day: str) -> str:
-    return f"# ARXIV PAPERS FOR THE WEEK {_format_week_range(run_date, rotation_day)}"
+    return f"{_WEEKLY_TITLE_PREFIX} {_format_week_range(run_date, rotation_day)}"
 
 
 def _replace_weekly_title(text: str, title: str) -> str:
@@ -206,11 +216,64 @@ def _replace_weekly_title(text: str, title: str) -> str:
     return f"{title}\n\n{text.lstrip()}"
 
 
+def _weekly_marker(note_date: date, rotation_day: str) -> str:
+    return f"<!-- re-ass-week-start: {_week_start(note_date, rotation_day).isoformat()} -->"
+
+
+def _replace_weekly_marker(text: str, note_date: date, rotation_day: str) -> str:
+    marker = _weekly_marker(note_date, rotation_day)
+    if _WEEK_START_MARKER_RE.search(text):
+        return _WEEK_START_MARKER_RE.sub(marker, text, count=1)
+
+    lines = text.splitlines(keepends=True)
+    for index, line in enumerate(lines):
+        if line.startswith("# "):
+            prefix = "".join(lines[: index + 1])
+            suffix = "".join(lines[index + 1 :])
+            separator = "" if suffix.startswith("\n") else "\n"
+            return f"{prefix}{marker}\n{separator}{suffix}"
+    return f"{marker}\n\n{text.lstrip()}"
+
+
+def _replace_weekly_header(text: str, note_date: date, rotation_day: str) -> str:
+    updated = _replace_weekly_title(text, _weekly_title(note_date, rotation_day))
+    return _replace_weekly_marker(updated, note_date, rotation_day)
+
+
 def _first_heading(text: str) -> str | None:
     for line in text.splitlines():
         if line.startswith("# "):
             return line.strip()
     return None
+
+
+def _week_start_from_title(text: str) -> date | None:
+    heading = _first_heading(text)
+    if heading is None:
+        return None
+
+    match = _WEEK_TITLE_RE.match(heading)
+    if match is None:
+        return None
+
+    end_year = int(match.group("end_year"))
+    start_month = match.group("start_month") or match.group("end_month")
+    start_year = int(match.group("start_year") or end_year)
+    start_label = f"{match.group('start_day')} {start_month} {start_year}"
+    try:
+        return pendulum.from_format(start_label, "D MMMM YYYY", tz="UTC").date()
+    except ValueError:
+        return None
+
+
+def _stored_week_start(text: str) -> date | None:
+    marker_match = _WEEK_START_MARKER_RE.search(text)
+    if marker_match is not None:
+        try:
+            return date.fromisoformat(marker_match.group("date"))
+        except ValueError:
+            return None
+    return _week_start_from_title(text)
 
 
 def _render_daily_template(template: str, run_date: date) -> str:
@@ -238,7 +301,7 @@ class NoteManager:
     def __init__(self, config: AppConfig) -> None:
         self.config = config
 
-    def bootstrap(self) -> None:
+    def bootstrap(self, reference_date: date | None = None) -> None:
         self.config.output_root.mkdir(parents=True, exist_ok=True)
         self.config.summaries_dir.mkdir(parents=True, exist_ok=True)
         self.config.daily_notes_dir.mkdir(parents=True, exist_ok=True)
@@ -247,23 +310,28 @@ class NoteManager:
         _require_file(self.config.daily_template, "Daily template")
         _require_file(self.config.weekly_template, "Weekly template")
 
-        self.ensure_weekly_note_exists()
+        self.ensure_weekly_note_exists(reference_date)
 
-    def ensure_weekly_note_exists(self) -> Path:
+    def ensure_weekly_note_exists(self, reference_date: date | None = None) -> Path:
+        reference_date = reference_date or date.today()
         weekly_path = self.weekly_note_path
         if not weekly_path.exists():
-            shutil.copyfile(self.config.weekly_template, weekly_path)
+            weekly_path.write_text(self._render_weekly_template(reference_date), encoding="utf-8")
         return weekly_path
 
     @property
     def weekly_note_path(self) -> Path:
         return self.config.weekly_notes_dir / self.config.weekly_note_file
 
-    def _archive_anchor_date(self, note_date: date) -> date:
-        return _week_start(note_date, self.config.rotation_day) + timedelta(days=7)
+    def _archive_week_start(self, note_date: date) -> date:
+        return _week_start(note_date, self.config.rotation_day)
 
     def archived_weekly_note_path(self, note_date: date) -> Path:
-        archive_name = self.config.archive_name_pattern.format(date=self._archive_anchor_date(note_date).isoformat())
+        archive_name = self.config.archive_name_pattern.format(date=self._archive_week_start(note_date).isoformat())
+        return self.config.weekly_notes_dir / archive_name
+
+    def _archived_weekly_note_path_for_week_start(self, week_start: date) -> Path:
+        archive_name = self.config.archive_name_pattern.format(date=week_start.isoformat())
         return self.config.weekly_notes_dir / archive_name
 
     def weekly_note_path_for(self, note_date: date, reference_date: date) -> Path:
@@ -281,29 +349,54 @@ class NoteManager:
 
     def _render_weekly_template(self, note_date: date) -> str:
         template_text = self.config.weekly_template.read_text(encoding="utf-8")
-        return _replace_weekly_title(template_text, _weekly_title(note_date, self.config.rotation_day))
+        return _replace_weekly_header(template_text, note_date, self.config.rotation_day)
 
     def _load_weekly_note_text(self, note_date: date, reference_date: date) -> str:
         weekly_path = self.weekly_note_path_for(note_date, reference_date)
-        if weekly_path.exists():
-            return weekly_path.read_text(encoding="utf-8")
-        return self._render_weekly_template(note_date)
+        target_week_start = _week_start(note_date, self.config.rotation_day)
+        if not weekly_path.exists():
+            return self._render_weekly_template(note_date)
+
+        text = weekly_path.read_text(encoding="utf-8")
+        stored_week_start = _stored_week_start(text)
+        if stored_week_start is None and weekly_path == self.weekly_note_path and _first_heading(text) == _WEEKLY_TITLE_PREFIX:
+            return _replace_weekly_header(text, note_date, self.config.rotation_day)
+        if stored_week_start is None:
+            raise ValueError(f"Weekly note is missing a recognizable week marker: {weekly_path}")
+        if stored_week_start != target_week_start:
+            raise ValueError(
+                f"Weekly note {weekly_path} belongs to {stored_week_start.isoformat()}, "
+                f"not {target_week_start.isoformat()}."
+            )
+        return text
 
     def rotate_weekly_note_if_needed(self, run_date: date) -> bool:
-        self.ensure_weekly_note_exists()
-        archive_path = self.config.weekly_notes_dir / self.config.archive_name_pattern.format(
-            date=_week_start(run_date, self.config.rotation_day).isoformat()
-        )
+        current_week_start = _week_start(run_date, self.config.rotation_day)
+        self.ensure_weekly_note_exists(run_date)
         weekly_text = self.weekly_note_path.read_text(encoding="utf-8")
-        template_text = self.config.weekly_template.read_text(encoding="utf-8")
-        if weekly_text.strip() == template_text.strip():
+        live_week_start = _stored_week_start(weekly_text)
+
+        if live_week_start is None and _first_heading(weekly_text) == _WEEKLY_TITLE_PREFIX:
+            self.weekly_note_path.write_text(
+                _replace_weekly_header(weekly_text, run_date, self.config.rotation_day),
+                encoding="utf-8",
+            )
             return False
-        if _first_heading(weekly_text) == _weekly_title(run_date, self.config.rotation_day):
+        if live_week_start is None:
+            raise ValueError(f"Weekly note is missing a recognizable week marker: {self.weekly_note_path}")
+        if live_week_start == current_week_start:
             return False
 
-        if not archive_path.exists():
-            shutil.move(str(self.weekly_note_path), str(archive_path))
-        shutil.copyfile(self.config.weekly_template, self.weekly_note_path)
+        if weekly_text.strip() == self._render_weekly_template(live_week_start).strip():
+            self.weekly_note_path.write_text(self._render_weekly_template(run_date), encoding="utf-8")
+            return False
+
+        archive_path = self._archived_weekly_note_path_for_week_start(live_week_start)
+        if archive_path.exists():
+            raise FileExistsError(f"Archived weekly note already exists and will not be overwritten: {archive_path}")
+
+        shutil.move(str(self.weekly_note_path), str(archive_path))
+        self.weekly_note_path.write_text(self._render_weekly_template(run_date), encoding="utf-8")
         return True
 
     def read_weekly_synthesis(self, note_date: date, *, reference_date: date | None = None) -> str:
@@ -372,7 +465,7 @@ class NoteManager:
         reference_date = reference_date or note_date
         weekly_path = self.weekly_note_path_for(note_date, reference_date)
         text = self._load_weekly_note_text(note_date, reference_date)
-        updated = _replace_weekly_title(text, _weekly_title(note_date, self.config.rotation_day))
+        updated = _replace_weekly_header(text, note_date, self.config.rotation_day)
         updated = _replace_section(updated, self.config.weekly_synthesis_heading, synthesis.strip())
         existing_additions = _read_section(updated, self.config.weekly_additions_heading)
         additions = _build_weekly_additions(existing_additions, note_date, papers, link_style=self.config.link_style)

@@ -53,9 +53,10 @@ def test_state_store_saves_run_summary_json(tmp_path: Path) -> None:
     store = StateStore(make_app_config(tmp_path))
     store.bootstrap()
 
-    path = store.save_run_summary("2026-03-22", {"run_date": "2026-03-22", "completed_papers": 1})
+    path = store.save_run_summary({"run_date": "2026-03-22", "completed_papers": 1}, label="announcement-2026-03-22")
 
     assert path.exists()
+    assert "announcement-2026-03-22" in path.name
     assert json.loads(path.read_text(encoding="utf-8"))["completed_papers"] == 1
 
 
@@ -64,28 +65,28 @@ def test_state_store_returns_latest_successful_pull_date_for_migration(tmp_path:
     store.bootstrap()
 
     store.save_run_summary(
-        "2026-03-21",
         {
             "run_date": "2026-03-21",
             "fatal_error": "boom",
             "completed_papers": 1,
         },
+        label="overall-fatal",
     )
     store.save_run_summary(
-        "2026-03-22",
         {
             "run_date": "2026-03-22",
             "fatal_error": None,
             "completed_papers": 0,
         },
+        label="overall",
     )
     store.save_run_summary(
-        "2026-03-23",
         {
             "run_date": "2026-03-23",
             "fatal_error": None,
             "completed_papers": 2,
         },
+        label="announcement-2026-03-23",
     )
 
     assert store.latest_successful_pull_date().isoformat() == "2026-03-23"

@@ -176,8 +176,12 @@ class StateStore:
         _write_json(path, record)
         return path
 
-    def save_run_summary(self, run_date: str, summary: dict[str, Any]) -> Path:
-        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
-        path = self.runs_dir / f"{run_date}-{timestamp}.json"
+    def save_run_summary(self, summary: dict[str, Any], *, label: str) -> Path:
+        run_date = summary.get("run_date")
+        if not isinstance(run_date, str) or not run_date:
+            raise ValueError("Run summaries must include a non-empty 'run_date' field.")
+
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S-%fZ")
+        path = self.runs_dir / f"{run_date}--{label}--{timestamp}.json"
         _write_json(path, summary)
         return path

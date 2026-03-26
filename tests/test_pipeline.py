@@ -260,6 +260,11 @@ def test_pipeline_auto_assigns_note_dates_ending_at_invocation_date(tmp_path: Pa
     assert "Thursday Batch" in (config.daily_notes_dir / "2026-03-23.md").read_text(encoding="utf-8")
     assert "Friday Batch" in (config.daily_notes_dir / "2026-03-24.md").read_text(encoding="utf-8")
     assert "Monday Batch" in (config.daily_notes_dir / "2026-03-25.md").read_text(encoding="utf-8")
+    run_files = sorted(config.state_runs_dir.glob("*.json"))
+    assert len(run_files) == 3
+    assert any("announcement-2026-03-20" in path.name for path in run_files)
+    assert any("announcement-2026-03-21" in path.name for path in run_files)
+    assert any("announcement-2026-03-24" in path.name for path in run_files)
 
 
 def test_pipeline_backfill_leaves_current_weekly_summary_unchanged(tmp_path: Path, monkeypatch) -> None:
@@ -296,7 +301,7 @@ def test_pipeline_backfill_leaves_current_weekly_summary_unchanged(tmp_path: Pat
     weekly_text = manager.weekly_note_path.read_text(encoding="utf-8")
     assert "Live synthesis." in weekly_text
     assert "Backfill Paper" not in weekly_text
-    assert not (config.weekly_notes_dir / "2026-03-23-weekly-arxiv.md").exists()
+    assert not (config.weekly_notes_dir / "2026-03-16-weekly-arxiv.md").exists()
 
 
 def test_pipeline_backfill_renders_daily_template_for_target_date(tmp_path: Path, monkeypatch) -> None:

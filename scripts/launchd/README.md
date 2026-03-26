@@ -2,12 +2,16 @@
 
 This guide explains how to run `re-ass` automatically on macOS using the LaunchAgent files in this directory.
 
+`re-ass` processes arXiv announcement days that are already visible in the category listings. arXiv's help pages say new submissions received by `14:00` US Eastern are generally made available at `20:00` US Eastern, which is the next calendar day in Australia and many other timezones. Choose your local schedule with that in mind if you want the newest announcement batch on the same local day.
+
 ## What is included
 
 - `com.user.re-ass.plist.template`: a LaunchAgent template
 - `render-plist.sh`: fills in the correct local paths for `uv`, the repo root, and the log directory
 
 The rendered plist uses a default schedule of `7:00 AM` every day. If that works for you, you can keep it. If you want a different schedule, edit the rendered plist before installing it.
+
+For example, in `Australia/Melbourne`, arXiv's `20:00` US Eastern availability is typically around `10:00 AEST` or `11:00 AEDT` the next day. A `5:00 AM` or `7:00 AM` local schedule will still work, but it will only process announcement days that were already visible before that morning's run. If you want the latest batch on the same local day, schedule `re-ass` after noon local time.
 
 ## Before you automate
 
@@ -141,6 +145,7 @@ state/papers/
 - `launchd` uses your Mac's local timezone.
 - If your Mac is asleep when a run is due, `launchd` coalesces missed calendar events and runs the job after wake.
 - `re-ass` tracks the last completed arXiv announcement day, so scheduled runs pick up the next visible announcement batch instead of relying on a rolling time window.
+- Early-morning schedules are safe, but they can lag behind arXiv's local availability time. That means `re-ass` may process the previous visible announcement day and catch up on the next scheduled run.
 - If you reinstall or move the provider CLI binary, or your PATH changes, rerun `./scripts/launchd/render-plist.sh` and reinstall the LaunchAgent so the updated PATH is captured.
 
 ## Updating or removing the job
