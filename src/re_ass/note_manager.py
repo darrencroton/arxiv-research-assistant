@@ -67,11 +67,13 @@ def _section_bounds(lines: list[str], heading: str) -> tuple[int, int] | None:
     probe = next_heading_index - 1
     while probe > heading_index and not lines[probe].strip():
         probe -= 1
-    if probe > heading_index and lines[probe].strip() == "---":
+    has_separator = probe > heading_index and lines[probe].strip() == "---"
+    if has_separator:
         end_index = probe
 
-    while end_index > heading_index + 1 and not lines[end_index - 1].strip():
-        end_index -= 1
+    if not has_separator:
+        while end_index > heading_index + 1 and not lines[end_index - 1].strip():
+            end_index -= 1
 
     return heading_index, end_index
 
@@ -216,28 +218,29 @@ def _replace_weekly_title(text: str, title: str) -> str:
     return f"{title}\n\n{text.lstrip()}"
 
 
-def _weekly_marker(note_date: date, rotation_day: str) -> str:
-    return f"<!-- re-ass-week-start: {_week_start(note_date, rotation_day).isoformat()} -->"
+def _remove_legacy_week_marker(text: str) -> str:
+    return _WEEK_START_MARKER_RE.sub("", text, count=1)
 
 
-def _replace_weekly_marker(text: str, note_date: date, rotation_day: str) -> str:
-    marker = _weekly_marker(note_date, rotation_day)
-    if _WEEK_START_MARKER_RE.search(text):
-        return _WEEK_START_MARKER_RE.sub(marker, text, count=1)
-
+def _ensure_blank_line_after_first_heading(text: str) -> str:
     lines = text.splitlines(keepends=True)
     for index, line in enumerate(lines):
         if line.startswith("# "):
             prefix = "".join(lines[: index + 1])
-            suffix = "".join(lines[index + 1 :])
-            separator = "" if suffix.startswith("\n") else "\n"
-            return f"{prefix}{marker}\n{separator}{suffix}"
-    return f"{marker}\n\n{text.lstrip()}"
+            suffix_lines = lines[index + 1 :]
+            while suffix_lines and not suffix_lines[0].strip():
+                suffix_lines.pop(0)
+            suffix = "".join(suffix_lines)
+            if not suffix:
+                return prefix
+            return f"{prefix}\n{suffix}"
+    return text
 
 
 def _replace_weekly_header(text: str, note_date: date, rotation_day: str) -> str:
     updated = _replace_weekly_title(text, _weekly_title(note_date, rotation_day))
-    return _replace_weekly_marker(updated, note_date, rotation_day)
+    updated = _remove_legacy_week_marker(updated)
+    return _ensure_blank_line_after_first_heading(updated)
 
 
 def _first_heading(text: str) -> str | None:
@@ -362,7 +365,7 @@ class NoteManager:
         if stored_week_start is None and weekly_path == self.weekly_note_path and _first_heading(text) == _WEEKLY_TITLE_PREFIX:
             return _replace_weekly_header(text, note_date, self.config.rotation_day)
         if stored_week_start is None:
-            raise ValueError(f"Weekly note is missing a recognizable week marker: {weekly_path}")
+            raise ValueError(f"Weekly note is missing a recognizable week heading: {weekly_path}")
         if stored_week_start != target_week_start:
             raise ValueError(
                 f"Weekly note {weekly_path} belongs to {stored_week_start.isoformat()}, "
@@ -383,7 +386,7 @@ class NoteManager:
             )
             return False
         if live_week_start is None:
-            raise ValueError(f"Weekly note is missing a recognizable week marker: {self.weekly_note_path}")
+            raise ValueError(f"Weekly note is missing a recognizable week heading: {self.weekly_note_path}")
         if live_week_start == current_week_start:
             return False
 

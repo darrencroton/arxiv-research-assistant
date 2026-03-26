@@ -61,6 +61,7 @@ def test_update_weekly_note_replaces_same_day_section(tmp_path: Path) -> None:
 
     weekly_text = manager.weekly_note_path.read_text(encoding="utf-8")
     assert weekly_text.startswith("# ARXIV PAPERS FOR THE WEEK 23rd - 27th March 2026")
+    assert "<!-- re-ass-week-start:" not in weekly_text
     assert weekly_text.count("### Tuesday 24th") == 1
     assert weekly_text.count("**Title:**") == 1
     assert "\n\n**Summary:** Second summary." in weekly_text
@@ -123,6 +124,43 @@ def test_update_weekly_note_appends_missing_sections(tmp_path: Path) -> None:
     assert "Fresh synthesis." in weekly_text
     assert manager.config.weekly_additions_heading in weekly_text
     assert "### Tuesday 24th" in weekly_text
+
+
+def test_bootstrap_weekly_note_uses_heading_without_hidden_week_marker(tmp_path: Path) -> None:
+    manager = NoteManager(make_app_config(tmp_path))
+
+    manager.bootstrap(reference_date=date(2026, 3, 24))
+
+    weekly_text = manager.weekly_note_path.read_text(encoding="utf-8")
+    assert weekly_text.startswith("# ARXIV PAPERS FOR THE WEEK 23rd - 27th March 2026\n\n")
+    assert "<!-- re-ass-week-start:" not in weekly_text
+
+
+def test_update_weekly_note_removes_legacy_week_marker_and_keeps_single_blank_line_before_separator(tmp_path: Path) -> None:
+    manager = NoteManager(make_app_config(tmp_path))
+    manager.bootstrap()
+    manager.weekly_note_path.write_text(
+        (
+            "# ARXIV PAPERS FOR THE WEEK 23rd - 27th March 2026\n"
+            "<!-- re-ass-week-start: 2026-03-23 -->\n"
+            "## SYNTHESIS\n\n"
+            "Old synthesis.\n\n"
+            "---\n"
+            "## DAILY ADDITIONS\n"
+        ),
+        encoding="utf-8",
+    )
+
+    manager.update_weekly_note(
+        date(2026, 3, 24),
+        [make_processed_paper(tmp_path, micro_summary="Fresh summary.")],
+        "First paragraph.\n\nSecond paragraph.",
+    )
+
+    weekly_text = manager.weekly_note_path.read_text(encoding="utf-8")
+    assert "<!-- re-ass-week-start:" not in weekly_text
+    assert "Second paragraph.\n\n---\n## DAILY ADDITIONS" in weekly_text
+    assert "Second paragraph.\n\n\n---" not in weekly_text
 
 
 def test_preview_weekly_additions_merges_new_day_without_writing_file(tmp_path: Path) -> None:
@@ -200,6 +238,7 @@ def test_catch_up_writes_the_target_week_without_reusing_a_stale_archive(tmp_pat
     assert "Catch-up summary." in catch_up_text
     assert "### Tuesday 10th" not in catch_up_text
     assert "Old summary." not in catch_up_text
+    assert "<!-- re-ass-week-start:" not in catch_up_text
 
 
 def test_update_notes_uses_configured_managed_headings(tmp_path: Path) -> None:

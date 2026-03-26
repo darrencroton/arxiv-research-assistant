@@ -91,7 +91,7 @@ def test_generation_service_raises_when_summariser_fails(tmp_path: Path) -> None
 
 
 def test_generate_weekly_synthesis_uses_full_weekly_additions_and_word_limit(tmp_path: Path) -> None:
-    provider = RecordingProvider(response="Rewritten weekly synthesis.")
+    provider = RecordingProvider(response="Lead line.\n- Theme one\n- Theme two")
     service = GenerationService(
         config=make_app_config(tmp_path).llm,
         provider=provider,
@@ -109,16 +109,19 @@ def test_generate_weekly_synthesis_uses_full_weekly_additions_and_word_limit(tmp
 
     synthesis = service.generate_weekly_synthesis("Earlier synthesis.", weekly_additions, word_limit=150)
 
-    assert synthesis == "Rewritten weekly synthesis."
+    assert synthesis == "Lead line.\n- Theme one\n- Theme two"
     assert provider.calls == [
         {
             "content": "",
             "is_pdf": False,
             "system_prompt": (
                 "Rewrite the weekly synthesis for this rolling research note from the full set of weekly paper "
-                "additions gathered so far. Produce one cohesive plain-text paragraph that synthesises cross-paper "
-                "themes, methodological connections, tensions, and how the week's story is evolving. Prefer "
-                "synthesis over listing papers one by one. Stay within 150 words."
+                "additions gathered so far. Produce a concise markdown synthesis that explains cross-paper "
+                "themes, methodological connections, tensions, and how the week's story is evolving. "
+                "Prioritise synthesis over a paper-by-paper recap. Choose the clearest structure for the "
+                "material: one short paragraph, multiple short paragraphs, bullets, or a mix. Use bullets only "
+                "when they genuinely improve readability. Keep the note quickly digestible, return markdown "
+                "only, and stay within 150 words."
             ),
             "user_prompt": (
                 "Current synthesis:\nEarlier synthesis.\n\n"
@@ -134,6 +137,34 @@ def test_generate_weekly_synthesis_uses_full_weekly_additions_and_word_limit(tmp
             "max_tokens": 768,
         }
     ]
+
+
+def test_generate_weekly_synthesis_preserves_digestible_markdown_structure(tmp_path: Path) -> None:
+    provider = RecordingProvider(
+        response="First line\ncontinues here.\n\n- Theme one\n- Theme two\n\nClosing thought."
+    )
+    service = GenerationService(
+        config=make_app_config(tmp_path).llm,
+        provider=provider,
+        paper_summariser=StubPaperSummariser(),
+    )
+
+    synthesis = service.generate_weekly_synthesis("Earlier synthesis.", "**Summary:** First summary.\n", word_limit=50)
+
+    assert synthesis == "First line continues here.\n\n- Theme one\n- Theme two\n\nClosing thought."
+
+
+def test_generate_weekly_synthesis_truncates_without_flattening_markdown_structure(tmp_path: Path) -> None:
+    provider = RecordingProvider(response="Overview paragraph.\n\n- First theme with context\n- Second theme follows")
+    service = GenerationService(
+        config=make_app_config(tmp_path).llm,
+        provider=provider,
+        paper_summariser=StubPaperSummariser(),
+    )
+
+    synthesis = service.generate_weekly_synthesis("Earlier synthesis.", "**Summary:** First summary.\n", word_limit=6)
+
+    assert synthesis == "Overview paragraph.\n\n- First theme with context..."
 
 
 def test_generate_weekly_synthesis_fallback_rebuilds_from_all_weekly_summaries(tmp_path: Path) -> None:

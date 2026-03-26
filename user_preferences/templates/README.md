@@ -78,7 +78,7 @@ The current defaults are:
 
 Important details:
 
-- `re-ass` rewrites the first `#` title in the file to include the current week range.
+- `re-ass` rewrites the first `#` title in the file to include the current week range; that visible heading is the source of truth for the note's week.
 - The synthesis heading section is managed by `re-ass` and replaced with the current weekly synthesis.
 - The daily additions heading section is managed by `re-ass` and updated with per-day paper entries such as `### Monday 23rd`.
 - Content outside those sections is left alone.
@@ -118,6 +118,7 @@ The `---` separator is optional, but the built-in template uses it and it reads 
 
 `re-ass` rewrites a rolling synthesis for the current week from the full weekly additions gathered so far into the heading configured by `notes.weekly_synthesis_heading`.
 The default word budget starts at 100 words and expands through the week to 200 words by the end of the note window.
+The synthesis may use one short paragraph, multiple short paragraphs, bullets, or a mix, depending on which format best communicates the cross-paper themes clearly.
 
 ### Weekly daily additions
 

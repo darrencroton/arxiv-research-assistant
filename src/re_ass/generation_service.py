@@ -17,6 +17,8 @@ from re_ass.settings import LlmConfig
 LOGGER = logging.getLogger(__name__)
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 _WEEKLY_SUMMARY_LINE = re.compile(r"(?m)^\*\*Summary:\*\*\s*(.+?)\s*$")
+_MARKDOWN_LIST_ITEM = re.compile(r"^(?:[-*+]\s+|\d+\.\s+)")
+_MARKDOWN_HEADING = re.compile(r"^#{1,6}\s+")
 
 
 class GenerationError(RuntimeError):
@@ -87,9 +89,12 @@ class GenerationService:
                 response = self._run_text_prompt(
                     (
                         "Rewrite the weekly synthesis for this rolling research note from the full set of weekly paper "
-                        "additions gathered so far. Produce one cohesive plain-text paragraph that synthesises cross-paper "
-                        "themes, methodological connections, tensions, and how the week's story is evolving. Prefer "
-                        "synthesis over listing papers one by one. Stay within "
+                        "additions gathered so far. Produce a concise markdown synthesis that explains cross-paper "
+                        "themes, methodological connections, tensions, and how the week's story is evolving. "
+                        "Prioritise synthesis over a paper-by-paper recap. Choose the clearest structure for the "
+                        "material: one short paragraph, multiple short paragraphs, bullets, or a mix. Use bullets only "
+                        "when they genuinely improve readability. Keep the note quickly digestible, return markdown "
+                        "only, and stay within "
                         f"{word_limit} words."
                     ),
                     (
@@ -98,7 +103,7 @@ class GenerationService:
                     ),
                     max_tokens=min(self.config.max_output_tokens, 768),
                 )
-                cleaned = self._truncate_words(self._clean_text(response), limit=word_limit)
+                cleaned = self._truncate_markdown_words(self._clean_weekly_synthesis(response), limit=word_limit)
                 if cleaned:
                     return cleaned
             except GenerationError as error:
@@ -126,10 +131,10 @@ class GenerationService:
     def _fallback_weekly_synthesis(self, existing_synthesis: str, weekly_additions: str, *, word_limit: int) -> str:
         summaries = self._extract_weekly_micro_summaries(weekly_additions)
         if not summaries:
-            return self._truncate_words(existing_synthesis.strip(), limit=word_limit)
+            return self._truncate_markdown_words(self._clean_weekly_synthesis(existing_synthesis), limit=word_limit)
 
         base_text = "This week's notable papers include " + "; ".join(summaries) + "."
-        return self._truncate_words(base_text, limit=word_limit)
+        return self._truncate_markdown_words(self._clean_weekly_synthesis(base_text), limit=word_limit)
 
     def _clean_text(self, text: str) -> str:
         cleaned = text.strip().strip('"').strip("'")
@@ -137,11 +142,94 @@ class GenerationService:
         cleaned = re.sub(r"\s+", " ", cleaned)
         return cleaned
 
+    def _clean_weekly_synthesis(self, text: str) -> str:
+        cleaned = text.replace("\r\n", "\n").replace("\r", "\n").strip().strip('"').strip("'")
+        if not cleaned:
+            return ""
+
+        output_lines: list[str] = []
+        paragraph_parts: list[str] = []
+
+        def flush_paragraph() -> None:
+            if paragraph_parts:
+                output_lines.append(" ".join(paragraph_parts).strip())
+                paragraph_parts.clear()
+
+        for raw_line in cleaned.split("\n"):
+            stripped = raw_line.strip()
+            if not stripped:
+                flush_paragraph()
+                if output_lines and output_lines[-1] != "":
+                    output_lines.append("")
+                continue
+
+            if _MARKDOWN_LIST_ITEM.match(stripped) or _MARKDOWN_HEADING.match(stripped):
+                flush_paragraph()
+                output_lines.append(stripped)
+                continue
+
+            paragraph_parts.append(stripped)
+
+        flush_paragraph()
+
+        while output_lines and output_lines[0] == "":
+            output_lines.pop(0)
+        while output_lines and output_lines[-1] == "":
+            output_lines.pop()
+        return "\n".join(output_lines)
+
     def _truncate_words(self, text: str, *, limit: int) -> str:
         words = text.split()
         if len(words) <= limit:
             return " ".join(words).strip()
         return " ".join(words[:limit]).rstrip(".,;:") + "..."
+
+    def _truncate_markdown_words(self, text: str, *, limit: int) -> str:
+        if limit <= 0:
+            return ""
+
+        output_lines: list[str] = []
+        remaining = limit
+
+        def append_ellipsis_to_last_content_line() -> None:
+            for index in range(len(output_lines) - 1, -1, -1):
+                if output_lines[index]:
+                    output_lines[index] = output_lines[index].rstrip(".,;:") + "..."
+                    return
+
+        for raw_line in text.split("\n"):
+            stripped = raw_line.strip()
+            if not stripped:
+                if output_lines and output_lines[-1] != "":
+                    output_lines.append("")
+                continue
+
+            prefix = ""
+            content = stripped
+            for pattern in (_MARKDOWN_LIST_ITEM, _MARKDOWN_HEADING):
+                match = pattern.match(stripped)
+                if match is not None:
+                    prefix = match.group(0)
+                    content = stripped[len(prefix) :].strip()
+                    break
+
+            words = content.split()
+            if len(words) <= remaining:
+                output_lines.append(f"{prefix}{' '.join(words)}".rstrip())
+                remaining -= len(words)
+                continue
+
+            if remaining > 0:
+                truncated = " ".join(words[:remaining]).rstrip(".,;:")
+                if truncated:
+                    output_lines.append(f"{prefix}{truncated}...")
+            else:
+                append_ellipsis_to_last_content_line()
+            break
+
+        while output_lines and output_lines[-1] == "":
+            output_lines.pop()
+        return "\n".join(output_lines).strip()
 
     def _extract_weekly_micro_summaries(self, weekly_additions: str) -> list[str]:
         return [match.rstrip(".") for match in _WEEKLY_SUMMARY_LINE.findall(weekly_additions) if match.strip()]
