@@ -42,6 +42,10 @@
 - `scripts/setup.sh` and `GenerationService` should fail early when the configured CLI provider is present but not authenticated for non-interactive use.
 - Gemini CLI support in this repo is for API-key or Vertex-AI-backed automation credentials, not piggybacked interactive OAuth.
 - Daily and weekly summary updates must stay inside managed markers.
-- Explicit `--date` backfills must not rotate or rewrite the current weekly summary.
+- Standard automatic runs are "reading note" runs: fetch the newest visible arXiv announcement batch and write it into today's daily note, even when the underlying arXiv announcement date is earlier.
+- Automatic catch-up after missed runs is still relative to today's note: the newest visible pending batch goes into today's daily note, then older pending batches backfill earlier weekday daily notes working backwards from today, skipping weekends.
+- Automatic catch-up should update whichever weekly notes those backfilled daily notes belong to, including archived prior-week notes when a catch-up spans a weekly boundary.
+- Explicit `--date` backfills are surgical single-day pulls: process exactly that announcement day, write/update that date's daily note, and do not rotate or rewrite the current weekly summary.
+- Automatic catch-up only covers announcement days still visible in arXiv recent listings; older recovery requires an explicit single-day backfill if the day is still visible at all.
 - `state/papers/*.json` is the authoritative completion record; note or PDF presence alone is not.
 - `state/runs/*.json` should remain audit-friendly and include full ranking plus final-selection diagnostics.

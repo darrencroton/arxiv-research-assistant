@@ -163,12 +163,26 @@ def _pending_announcement_dates(
     return [day for day in available_dates if day > last_completed_announcement_date]
 
 
+def _scheduled_note_dates(invocation_date: date, count: int) -> list[date]:
+    if count <= 0:
+        return []
+
+    note_dates: list[date] = []
+    candidate = invocation_date
+    while len(note_dates) < count:
+        if candidate.weekday() < 5:
+            note_dates.append(candidate)
+        candidate -= timedelta(days=1)
+    note_dates.reverse()
+    return note_dates
+
+
 def _note_dates_for_pending(invocation_date: date, announcement_dates: list[date]) -> dict[date, date]:
     if not announcement_dates:
         return {}
-    start_date = invocation_date - timedelta(days=len(announcement_dates) - 1)
+    scheduled_dates = _scheduled_note_dates(invocation_date, len(announcement_dates))
     return {
-        announcement_date: start_date + timedelta(days=index)
+        announcement_date: scheduled_dates[index]
         for index, announcement_date in enumerate(announcement_dates)
     }
 

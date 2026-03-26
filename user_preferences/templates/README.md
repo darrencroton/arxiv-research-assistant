@@ -40,6 +40,7 @@ Important details:
 - Anything under that specific heading is managed by `re-ass` and may be replaced.
 - Content outside that heading is left alone.
 - If the heading is missing, `re-ass` appends a fresh managed section at the end of the daily note.
+- Automatic catch-up places missed batches onto earlier weekday notes, not onto every consecutive calendar day.
 
 ### Supported date placeholders
 

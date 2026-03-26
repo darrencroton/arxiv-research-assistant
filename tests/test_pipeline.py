@@ -267,6 +267,39 @@ def test_pipeline_auto_assigns_note_dates_ending_at_invocation_date(tmp_path: Pa
     assert any("announcement-2026-03-24" in path.name for path in run_files)
 
 
+def test_pipeline_skips_weekend_note_dates_when_backfilling_automatic_runs(tmp_path: Path, monkeypatch) -> None:
+    config = make_app_config(tmp_path)
+    papers = [
+        make_paper(arxiv_id="2603.30101", title="Friday Reading Paper"),
+        make_paper(arxiv_id="2603.30102", title="Monday Reading Paper"),
+    ]
+
+    class WeekendGapFetcher(FakeFetcher):
+        def __init__(self):
+            super().__init__([], available_dates=[date(2026, 3, 25), date(2026, 3, 26)])
+            self._papers_by_day = {
+                date(2026, 3, 25): [papers[0]],
+                date(2026, 3, 26): [papers[1]],
+            }
+
+        def collect_candidates(self, *_args, **kwargs):
+            FakeFetcher.last_call = kwargs
+            return list(self._papers_by_day[kwargs["announcement_date"]])
+
+    monkeypatch.setattr("re_ass.pipeline.ArxivFetcher", lambda **_kwargs: WeekendGapFetcher())
+    monkeypatch.setattr("re_ass.pipeline.PaperRanker", lambda **kwargs: FakeRanker(**kwargs))
+    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: _preferences())
+    monkeypatch.setattr("re_ass.pipeline.GenerationService", lambda **_kwargs: FakeGenerationService())
+
+    exit_code = run(config, date(2026, 3, 30))
+
+    assert exit_code == 0
+    assert "Friday Reading Paper" in (config.daily_notes_dir / "2026-03-27.md").read_text(encoding="utf-8")
+    assert "Monday Reading Paper" in (config.daily_notes_dir / "2026-03-30.md").read_text(encoding="utf-8")
+    assert not (config.daily_notes_dir / "2026-03-28.md").exists()
+    assert not (config.daily_notes_dir / "2026-03-29.md").exists()
+
+
 def test_pipeline_backfill_leaves_current_weekly_summary_unchanged(tmp_path: Path, monkeypatch) -> None:
     config = make_app_config(tmp_path)
     manager = NoteManager(config)
@@ -373,19 +406,19 @@ def test_pipeline_records_announcement_and_ranking_diagnostics(tmp_path: Path, m
         make_paper(arxiv_id="2603.30052", title="Ranked Two"),
     ]
     selection = _build_selection(papers, selected=papers[:1])
-    monkeypatch.setattr("re_ass.pipeline.ArxivFetcher", lambda **_kwargs: FakeFetcher(papers, available_dates=[date(2026, 3, 28)]))
+    monkeypatch.setattr("re_ass.pipeline.ArxivFetcher", lambda **_kwargs: FakeFetcher(papers, available_dates=[date(2026, 3, 26)]))
     monkeypatch.setattr("re_ass.pipeline.PaperRanker", lambda **kwargs: FakeRanker(selection=selection, **kwargs))
     monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: _preferences())
     monkeypatch.setattr("re_ass.pipeline.GenerationService", lambda **_kwargs: FakeGenerationService())
 
-    exit_code = run(config, date(2026, 3, 28))
+    exit_code = run(config, date(2026, 3, 26))
 
     assert exit_code == 0
     summary_text = next(config.state_runs_dir.glob("*.json")).read_text(encoding="utf-8")
-    assert '"announcement_date": "2026-03-28"' in summary_text
-    assert '"note_date": "2026-03-28"' in summary_text
+    assert '"announcement_date": "2026-03-26"' in summary_text
+    assert '"note_date": "2026-03-26"' in summary_text
     assert '"available_announcement_dates"' in summary_text
-    assert '"visible_window_start": "2026-03-28"' in summary_text
+    assert '"visible_window_start": "2026-03-26"' in summary_text
     assert '"candidate_count": 2' in summary_text
     assert '"max_papers": 10' in summary_text
     assert '"min_selection_score": 75.0' in summary_text
