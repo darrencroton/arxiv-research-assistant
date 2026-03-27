@@ -48,10 +48,6 @@ def _candidate_records(candidates: list[ArxivPaper]) -> list[tuple[ArxivPaper, s
     return records
 
 
-def _ordered_priorities_text(preferences: PreferenceConfig) -> str:
-    return "\n".join(f"{index + 1}. {priority}" for index, priority in enumerate(preferences.priorities))
-
-
 def _format_priority_list(priorities: tuple[str, ...]) -> str:
     return "\n".join(f"{index + 1}. {priority}" for index, priority in enumerate(priorities))
 
@@ -74,7 +70,7 @@ def _priority_prompt_text(preferences: PreferenceConfig) -> str:
     if not _requires_dual_match(preferences):
         return (
             "<ordered_priorities>\n"
-            f"{_ordered_priorities_text(preferences)}\n"
+            f"{_format_priority_list(preferences.priorities)}\n"
             "</ordered_priorities>"
         )
 

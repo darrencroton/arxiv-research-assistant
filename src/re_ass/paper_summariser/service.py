@@ -405,10 +405,11 @@ def _create_source_metadata_block(source_metadata: SourceMetadata | None) -> str
         f"Canonical paper link: {source_metadata.canonical_url}\n"
     )
     if source_metadata.published_label:
-        block += f"Published line date: {source_metadata.published_label}\n"
+        block += (
+            f"Published line date: {source_metadata.published_label}\n"
+            "You MUST use this exact month and year in the Published line.\n"
+        )
     block += "You MUST use this exact link in the Published line.\n"
-    if source_metadata.published_label:
-        block += "You MUST use this exact month and year in the Published line.\n"
     block += "</source_metadata>\n\n"
     return block
 

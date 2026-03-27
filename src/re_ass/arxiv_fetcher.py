@@ -38,6 +38,8 @@ def _to_paper(result: Any) -> ArxivPaper:
         published=_ensure_utc(result.published),
         updated=_ensure_utc(result.updated) if result.updated else None,
     )
+
+
 class _AnnouncementListingParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)

@@ -56,20 +56,8 @@ def _ranking_summary(selection) -> list[dict[str, object]]:
     return results
 
 
-def _selected_identity_summary(papers) -> list[str]:
+def _paper_keys(papers) -> list[str]:
     return [derive_identity(paper).paper_key for paper in papers]
-
-
-def _candidate_identity_summary(papers) -> list[str]:
-    return [derive_identity(paper).paper_key for paper in papers]
-
-
-def _selected_summary(selection) -> list[dict[str, object]]:
-    return _ranked_items_summary(selection.selected)
-
-
-def _weekly_interest_summary(selection) -> list[dict[str, object]]:
-    return _ranked_items_summary(selection.weekly_interest)
 
 
 def _ranked_items_summary(items) -> list[dict[str, object]]:
@@ -347,7 +335,7 @@ def _run_announcement_day(
             excluded_paper_keys=state_store.completed_paper_keys(),
         )
         run_summary["candidate_count"] = len(candidates)
-        run_summary["candidate_keys"] = _candidate_identity_summary(candidates)
+        run_summary["candidate_keys"] = _paper_keys(candidates)
 
         ranker = PaperRanker(
             provider=generation_service.provider,
@@ -363,11 +351,11 @@ def _run_announcement_day(
         run_summary["max_papers"] = config.max_papers
         run_summary["always_summarize_score"] = config.always_summarize_score
         run_summary["min_selection_score"] = config.min_selection_score
-        run_summary["selected_paper_keys"] = _selected_identity_summary(selected_papers)
-        run_summary["weekly_interest_paper_keys"] = _selected_identity_summary(weekly_interest_papers)
+        run_summary["selected_paper_keys"] = _paper_keys(selected_papers)
+        run_summary["weekly_interest_paper_keys"] = _paper_keys(weekly_interest_papers)
         run_summary["ranking_results"] = _ranking_summary(selection)
-        run_summary["selected_results"] = _selected_summary(selection)
-        run_summary["weekly_interest_results"] = _weekly_interest_summary(selection)
+        run_summary["selected_results"] = _ranked_items_summary(selection.selected)
+        run_summary["weekly_interest_results"] = _ranked_items_summary(selection.weekly_interest)
         run_summary["selected_papers"] = len(selected_papers)
         run_summary["weekly_interest_papers"] = len(weekly_interest_papers)
 

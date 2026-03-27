@@ -52,18 +52,17 @@ class GenerationService:
 
     def generate_micro_summary(self, paper: ArxivPaper) -> str:
         """Generate a 1-2 sentence micro-summary from title and abstract."""
-        if self.provider is not None:
-            try:
-                response = self._run_text_prompt(
-                    "Summarise the following arXiv abstract in 1-2 sentences. Return plain text only.",
-                    f"Title: {paper.title}\nAbstract: {paper.summary}",
-                    max_tokens=min(self.config.max_output_tokens, 512),
-                )
-                cleaned = self._clean_text(response)
-                if cleaned:
-                    return cleaned
-            except GenerationError as error:
-                LOGGER.warning("Micro-summary generation failed for %s: %s", paper.title, error)
+        try:
+            response = self._run_text_prompt(
+                "Summarise the following arXiv abstract in 1-2 sentences. Return plain text only.",
+                f"Title: {paper.title}\nAbstract: {paper.summary}",
+                max_tokens=min(self.config.max_output_tokens, 512),
+            )
+            cleaned = self._clean_text(response)
+            if cleaned:
+                return cleaned
+        except GenerationError as error:
+            LOGGER.warning("Micro-summary generation failed for %s: %s", paper.title, error)
 
         return self._fallback_micro_summary(paper.summary)
 
@@ -84,30 +83,29 @@ class GenerationService:
 
     def generate_weekly_synthesis(self, existing_synthesis: str, weekly_additions: str, *, word_limit: int) -> str:
         """Generate or update the weekly synthesis text from all weekly additions so far."""
-        if self.provider is not None:
-            try:
-                response = self._run_text_prompt(
-                    (
-                        "Rewrite the weekly synthesis for this rolling research note from the full set of weekly paper "
-                        "additions gathered so far. Produce a concise markdown synthesis that explains cross-paper "
-                        "themes, methodological connections, tensions, and how the week's story is evolving. "
-                        "Prioritise synthesis over a paper-by-paper recap. Choose the clearest structure for the "
-                        "material: one short paragraph, multiple short paragraphs, bullets, or a mix. Use bullets only "
-                        "when they genuinely improve readability. Keep the note quickly digestible, return markdown "
-                        "only, and stay within "
-                        f"{word_limit} words."
-                    ),
-                    (
-                        f"Current synthesis:\n{existing_synthesis or '(none)'}\n\n"
-                        f"Weekly paper additions so far:\n{weekly_additions or '(none)'}"
-                    ),
-                    max_tokens=min(self.config.max_output_tokens, 768),
-                )
-                cleaned = self._truncate_markdown_words(self._clean_weekly_synthesis(response), limit=word_limit)
-                if cleaned:
-                    return cleaned
-            except GenerationError as error:
-                LOGGER.warning("Weekly synthesis generation failed: %s", error)
+        try:
+            response = self._run_text_prompt(
+                (
+                    "Rewrite the weekly synthesis for this rolling research note from the full set of weekly paper "
+                    "additions gathered so far. Produce a concise markdown synthesis that explains cross-paper "
+                    "themes, methodological connections, tensions, and how the week's story is evolving. "
+                    "Prioritise synthesis over a paper-by-paper recap. Choose the clearest structure for the "
+                    "material: one short paragraph, multiple short paragraphs, bullets, or a mix. Use bullets only "
+                    "when they genuinely improve readability. Keep the note quickly digestible, return markdown "
+                    "only, and stay within "
+                    f"{word_limit} words."
+                ),
+                (
+                    f"Current synthesis:\n{existing_synthesis or '(none)'}\n\n"
+                    f"Weekly paper additions so far:\n{weekly_additions or '(none)'}"
+                ),
+                max_tokens=min(self.config.max_output_tokens, 768),
+            )
+            cleaned = self._truncate_markdown_words(self._clean_weekly_synthesis(response), limit=word_limit)
+            if cleaned:
+                return cleaned
+        except GenerationError as error:
+            LOGGER.warning("Weekly synthesis generation failed: %s", error)
 
         return self._fallback_weekly_synthesis(existing_synthesis, weekly_additions, word_limit=word_limit)
 

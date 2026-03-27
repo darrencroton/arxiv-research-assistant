@@ -67,11 +67,9 @@ def _section_bounds(lines: list[str], heading: str) -> tuple[int, int] | None:
     probe = next_heading_index - 1
     while probe > heading_index and not lines[probe].strip():
         probe -= 1
-    has_separator = probe > heading_index and lines[probe].strip() == "---"
-    if has_separator:
+    if probe > heading_index and lines[probe].strip() == "---":
         end_index = probe
-
-    if not has_separator:
+    else:
         while end_index > heading_index + 1 and not lines[end_index - 1].strip():
             end_index -= 1
 
