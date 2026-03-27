@@ -146,7 +146,7 @@ def _interest_entry(paper: ArxivPaper) -> str:
     source_id = extract_source_id(paper.entry_id or paper.arxiv_url)
     title = _escape_emphasis(paper.title)
     authors = _short_author_list(paper.authors)
-    return f'- "*{title}*", {authors}, [arXiv:{source_id}]({paper.arxiv_url})'
+    return f"- *{title}*, {authors}, [arXiv:{source_id}]({paper.arxiv_url})"
 
 
 def _build_weekly_additions(

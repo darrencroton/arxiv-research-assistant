@@ -89,7 +89,7 @@ def test_update_weekly_note_appends_other_papers_of_interest_inside_day_block(tm
     weekly_text = manager.weekly_note_path.read_text(encoding="utf-8")
     assert "### Tuesday 24th" in weekly_text
     assert "\n\n**Other papers of interest:**\n\n" in weekly_text
-    assert '- "*Interesting Overflow Paper*", Wang K., Peng Y., [arXiv:2603.22222](https://arxiv.org/abs/2603.22222)' in weekly_text
+    assert "- *Interesting Overflow Paper*, Wang K., Peng Y., [arXiv:2603.22222](https://arxiv.org/abs/2603.22222)" in weekly_text
     assert "**Summary:** First summary.\n\n**Other papers of interest:**" in weekly_text
 
 
