@@ -74,7 +74,8 @@ def make_app_config(tmp_path: Path, **overrides) -> AppConfig:
         weekly_synthesis_word_limit_end=200,
         max_papers=10,
         arxiv_page_size=50,
-        min_selection_score=75.0,
+        always_summarize_score=90.0,
+        min_selection_score=70.0,
         llm=LlmConfig(
             mode="cli",
             provider="claude",

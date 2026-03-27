@@ -37,7 +37,7 @@ This file controls:
 - `[templates]`: which daily and weekly templates to use
 - `[preferences]`: which preferences file to read
 - `[notes]`: link style, weekly filename, rotation day, archive naming, and managed headings
-- `[arxiv]`: fetch limits, ranking threshold, and maximum selected papers
+- `[arxiv]`: fetch limits, ranking thresholds, and the target number of full summaries
 - `[llm]`: provider mode, provider name, model, and optional reasoning effort
 
 Common provider setups:
@@ -167,7 +167,10 @@ Automatic runs are driven by arXiv announcement days, not by a rolling timestamp
 
 ## Ranking and Selection
 
-`re-ass` scores every fetched candidate against the priorities in `user_preferences/preferences.md`, keeps papers at or above `[arxiv].min_selection_score`, and then caps the final selection at `[arxiv].max_papers`.
+`re-ass` scores every fetched candidate against the priorities in `user_preferences/preferences.md`, always fully processes papers at or above `[arxiv].always_summarize_score`, and then fills up to `[arxiv].max_papers` full summaries with the next-best papers that still clear `[arxiv].min_selection_score`.
+
+If more papers clear `[arxiv].min_selection_score` than fit into the full-summary set, the overflow is still surfaced in the weekly note under that day's block as "Other papers of interest" with short author text and arXiv links.
+Set `[arxiv].max_papers = 0` to disable that lower-band fill while still surfacing qualifying papers as weekly bullets.
 
 The categories section controls which arXiv feeds are fetched in the first place. The priorities section then tells the ranker what counts as a strong match within that pool.
 

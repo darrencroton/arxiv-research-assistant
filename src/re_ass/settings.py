@@ -98,6 +98,7 @@ class AppConfig:
     # arxiv
     max_papers: int
     arxiv_page_size: int
+    always_summarize_score: float
     min_selection_score: float
 
     # llm
@@ -236,7 +237,13 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
         )
 
     # Arxiv
-    min_selection_score = float(arxiv_data.get("min_selection_score", 75.0))
+    always_summarize_score = float(arxiv_data.get("always_summarize_score", 90.0))
+    min_selection_score = float(arxiv_data.get("min_selection_score", 70.0))
+    if always_summarize_score < min_selection_score:
+        raise ValueError(
+            "Setting [arxiv].always_summarize_score must be greater than or equal to "
+            "[arxiv].min_selection_score."
+        )
 
     # LLM
     mode = str(llm_data.get("mode", "cli")).strip().lower()
@@ -296,6 +303,7 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
         weekly_synthesis_word_limit_end=weekly_synthesis_word_limit_end,
         max_papers=int(arxiv_data.get("max_papers", 3)),
         arxiv_page_size=int(arxiv_data.get("page_size", arxiv_data.get("max_results", 100))),
+        always_summarize_score=always_summarize_score,
         min_selection_score=min_selection_score,
         llm=llm,
     )

@@ -10,8 +10,8 @@ from urllib.parse import quote
 
 import pendulum
 
-from re_ass.models import ProcessedPaper
-from re_ass.paper_identity import render_link
+from re_ass.models import ArxivPaper, ProcessedPaper
+from re_ass.paper_identity import extract_source_id, render_link
 from re_ass.settings import AppConfig
 
 
@@ -109,7 +109,56 @@ def _read_section(text: str, heading: str) -> str:
     return body
 
 
-def _build_weekly_additions(existing_additions: str, run_date: date, papers: list[ProcessedPaper], *, link_style: str) -> str:
+def _escape_emphasis(text: str) -> str:
+    return text.replace("*", r"\*")
+
+
+def _author_initials(given_names: list[str]) -> str:
+    initials = []
+    for name in given_names:
+        clean = name.strip(".")
+        if not clean:
+            continue
+        initials.append(f"{clean[0]}.")
+    return " ".join(initials)
+
+
+def _short_author_name(author: str) -> str:
+    parts = [part for part in author.split() if part]
+    if len(parts) <= 1:
+        return author.strip() or "Unknown"
+    surname = parts[-1]
+    initials = _author_initials(parts[:-1])
+    if not initials:
+        return surname
+    return f"{surname} {initials}"
+
+
+def _short_author_list(authors: tuple[str, ...]) -> str:
+    if not authors:
+        return "Unknown"
+    if len(authors) == 1:
+        return _short_author_name(authors[0])
+    if len(authors) == 2:
+        return ", ".join(_short_author_name(author) for author in authors)
+    return f"{_short_author_name(authors[0])} et al."
+
+
+def _interest_entry(paper: ArxivPaper) -> str:
+    source_id = extract_source_id(paper.entry_id or paper.arxiv_url)
+    title = _escape_emphasis(paper.title)
+    authors = _short_author_list(paper.authors)
+    return f'- "*{title}*", {authors}, [arXiv:{source_id}]({paper.arxiv_url})'
+
+
+def _build_weekly_additions(
+    existing_additions: str,
+    run_date: date,
+    papers: list[ProcessedPaper],
+    *,
+    interest_papers: list[ArxivPaper] | None = None,
+    link_style: str,
+) -> str:
     day_heading = _format_day_heading(run_date)
     entries = [
         "\n".join(
@@ -121,7 +170,16 @@ def _build_weekly_additions(existing_additions: str, run_date: date, papers: lis
         )
         for paper in papers
     ]
-    day_block = "\n".join([f"### {day_heading}", "", "\n\n".join(entries)])
+    block_parts = [f"### {day_heading}"]
+    content_parts: list[str] = []
+    if entries:
+        content_parts.append("\n\n".join(entries))
+    if interest_papers:
+        interest_entries = "\n".join(_interest_entry(paper) for paper in interest_papers)
+        content_parts.append("\n".join(["**Other papers of interest:**", "", interest_entries]))
+    if content_parts:
+        block_parts.extend(["", "\n\n".join(content_parts)])
+    day_block = "\n".join(block_parts)
     return _upsert_day_block(existing_additions, day_heading, day_block)
 
 
@@ -417,11 +475,18 @@ class NoteManager:
         note_date: date,
         papers: list[ProcessedPaper],
         *,
+        interest_papers: list[ArxivPaper] | None = None,
         reference_date: date | None = None,
     ) -> str:
         reference_date = reference_date or note_date
         existing_additions = self.read_weekly_additions(note_date, reference_date=reference_date)
-        return _build_weekly_additions(existing_additions, note_date, papers, link_style=self.config.link_style)
+        return _build_weekly_additions(
+            existing_additions,
+            note_date,
+            papers,
+            interest_papers=interest_papers,
+            link_style=self.config.link_style,
+        )
 
     def update_daily_note(
         self,
@@ -463,6 +528,7 @@ class NoteManager:
         papers: list[ProcessedPaper],
         synthesis: str,
         *,
+        interest_papers: list[ArxivPaper] | None = None,
         reference_date: date | None = None,
     ) -> Path:
         reference_date = reference_date or note_date
@@ -471,7 +537,13 @@ class NoteManager:
         updated = _replace_weekly_header(text, note_date, self.config.rotation_day)
         updated = _replace_section(updated, self.config.weekly_synthesis_heading, synthesis.strip())
         existing_additions = _read_section(updated, self.config.weekly_additions_heading)
-        additions = _build_weekly_additions(existing_additions, note_date, papers, link_style=self.config.link_style)
+        additions = _build_weekly_additions(
+            existing_additions,
+            note_date,
+            papers,
+            interest_papers=interest_papers,
+            link_style=self.config.link_style,
+        )
         updated = _replace_section(updated, self.config.weekly_additions_heading, additions)
 
         weekly_path.parent.mkdir(parents=True, exist_ok=True)

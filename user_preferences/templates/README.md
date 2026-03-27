@@ -119,6 +119,7 @@ The `---` separator is optional, but the built-in template uses it and it reads 
 `re-ass` rewrites a rolling synthesis for the current week from the full weekly additions gathered so far into the heading configured by `notes.weekly_synthesis_heading`.
 The default word budget starts at 100 words and expands through the week to 200 words by the end of the note window.
 The synthesis may use one short paragraph, multiple short paragraphs, bullets, or a mix, depending on which format best communicates the cross-paper themes clearly.
+Only fully summarised papers are included in the synthesis input. Weekly overflow bullets are rendered in the saved note but do not drive the synthesis.
 
 ### Weekly daily additions
 
@@ -130,6 +131,10 @@ The synthesis may use one short paragraph, multiple short paragraphs, bullets, o
 **Title:** [[paper-note]]
 
 **Summary:** Short summary here.
+
+**Other papers of interest:**
+
+- "*Overflow paper title*", Surname A. et al., [arXiv:2603.12345](https://arxiv.org/abs/2603.12345)
 ```
 
 ## Recommended workflow for Obsidian or another notes app

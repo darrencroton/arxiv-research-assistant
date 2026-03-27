@@ -20,6 +20,7 @@ def test_load_config_parses_explicit_llm_provider_settings(tmp_path: Path) -> No
         f"{DEFAULT_HEADINGS}\n"
         "[arxiv]\n"
         "page_size = 75\n"
+        "always_summarize_score = 91.5\n"
         "min_selection_score = 82.5\n"
         "\n"
         "[llm]\n"
@@ -43,6 +44,7 @@ def test_load_config_parses_explicit_llm_provider_settings(tmp_path: Path) -> No
     assert config.llm.provider == "openai"
     assert config.llm.model == "gpt-5.2"
     assert config.arxiv_page_size == 75
+    assert config.always_summarize_score == 91.5
     assert config.min_selection_score == 82.5
     assert config.llm.prompt_debug_file == (tmp_path / "archive" / "prompts" / "last.txt").resolve()
 
@@ -82,7 +84,8 @@ def test_load_config_uses_new_runtime_sections(tmp_path: Path) -> None:
     assert config.weekly_template == (tmp_path / "user_preferences" / "templates" / "weekly-note-template.md").resolve()
     assert config.preferences_file == (tmp_path / "user_preferences" / "preferences.md").resolve()
     assert config.arxiv_page_size == 100
-    assert config.min_selection_score == 75.0
+    assert config.always_summarize_score == 90.0
+    assert config.min_selection_score == 70.0
     assert config.daily_top_paper_heading == "## TODAY'S TOP PAPER"
     assert config.weekly_synthesis_heading == "## SYNTHESIS"
     assert config.weekly_additions_heading == "## DAILY ADDITIONS"
@@ -240,6 +243,20 @@ def test_load_config_rejects_invalid_llm_effort(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ValueError, match="llm.effort"):
+        load_config(config_path)
+
+
+def test_load_config_rejects_always_summarize_score_below_interest_threshold(tmp_path: Path) -> None:
+    config_path = tmp_path / "settings.toml"
+    config_path.write_text(
+        f"{DEFAULT_HEADINGS}\n"
+        "[arxiv]\n"
+        "always_summarize_score = 65\n"
+        "min_selection_score = 70\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="always_summarize_score"):
         load_config(config_path)
 
 

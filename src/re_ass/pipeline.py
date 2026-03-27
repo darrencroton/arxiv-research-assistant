@@ -35,6 +35,7 @@ def _weekly_synthesis_word_limit(config: AppConfig, note_date: date) -> int:
 
 def _ranking_summary(selection) -> list[dict[str, object]]:
     selected_keys = {item.paper_key for item in selection.selected}
+    weekly_interest_keys = {item.paper_key for item in selection.weekly_interest}
     results: list[dict[str, object]] = []
     for item in selection.ranked:
         result = {
@@ -45,6 +46,7 @@ def _ranking_summary(selection) -> list[dict[str, object]]:
             "score": item.score,
             "rationale": item.rationale,
             "selected": item.paper_key in selected_keys,
+            "weekly_interest": item.paper_key in weekly_interest_keys,
         }
         if item.science_match is not None:
             result["science_match"] = item.science_match
@@ -65,6 +67,24 @@ def _candidate_identity_summary(papers) -> list[str]:
 def _selected_summary(selection) -> list[dict[str, object]]:
     results: list[dict[str, object]] = []
     for item in selection.selected:
+        result = {
+            "paper_key": item.paper_key,
+            "source_id": item.source_id,
+            "title": item.paper.title,
+            "score": item.score,
+            "rationale": item.rationale,
+        }
+        if item.science_match is not None:
+            result["science_match"] = item.science_match
+        if item.method_match is not None:
+            result["method_match"] = item.method_match
+        results.append(result)
+    return results
+
+
+def _weekly_interest_summary(selection) -> list[dict[str, object]]:
+    results: list[dict[str, object]] = []
+    for item in selection.weekly_interest:
         result = {
             "paper_key": item.paper_key,
             "source_id": item.source_id,
@@ -116,11 +136,15 @@ def _run_summary_base(invocation_date: date) -> dict[str, object]:
         "candidate_count": 0,
         "candidate_keys": [],
         "max_papers": 0,
+        "always_summarize_score": 0.0,
         "min_selection_score": 0.0,
         "selected_paper_keys": [],
+        "weekly_interest_paper_keys": [],
         "ranking_results": [],
         "selected_results": [],
+        "weekly_interest_results": [],
         "selected_papers": 0,
+        "weekly_interest_papers": 0,
         "completed_papers": 0,
         "failed_papers": 0,
         "completed_keys": [],
@@ -339,17 +363,23 @@ def _run_announcement_day(
             provider=generation_service.provider,
             config=config.llm,
             max_papers=config.max_papers,
+            always_summarize_score=config.always_summarize_score,
             min_selection_score=config.min_selection_score,
         )
         selection = ranker.rank_papers(preferences, candidates)
         selected_papers = selection.selected_papers
+        weekly_interest_papers = [item.paper for item in selection.weekly_interest]
 
         run_summary["max_papers"] = config.max_papers
+        run_summary["always_summarize_score"] = config.always_summarize_score
         run_summary["min_selection_score"] = config.min_selection_score
         run_summary["selected_paper_keys"] = _selected_identity_summary(selected_papers)
+        run_summary["weekly_interest_paper_keys"] = _selected_identity_summary(weekly_interest_papers)
         run_summary["ranking_results"] = _ranking_summary(selection)
         run_summary["selected_results"] = _selected_summary(selection)
+        run_summary["weekly_interest_results"] = _weekly_interest_summary(selection)
         run_summary["selected_papers"] = len(selected_papers)
+        run_summary["weekly_interest_papers"] = len(weekly_interest_papers)
 
         successful_papers = _process_selected_papers(
             config,
@@ -379,9 +409,24 @@ def _run_announcement_day(
                     note_date,
                     successful_papers,
                     synthesis,
+                    interest_papers=weekly_interest_papers,
                     reference_date=invocation_date,
                 )
                 run_summary["weekly_note_updated"] = True
+        elif weekly_interest_papers and not selected_papers and not backfill:
+            existing_synthesis = note_manager.read_weekly_synthesis(note_date, reference_date=invocation_date)
+            note_manager.update_weekly_note(
+                note_date,
+                [],
+                existing_synthesis,
+                interest_papers=weekly_interest_papers,
+                reference_date=invocation_date,
+            )
+            run_summary["weekly_note_updated"] = True
+            LOGGER.info(
+                "No papers were promoted to full summaries for announcement date %s; weekly interest bullets were added without updating the daily note or synthesis.",
+                announcement_date.isoformat(),
+            )
         else:
             LOGGER.info(
                 "No papers completed successfully for announcement date %s; daily and weekly summaries were left unchanged.",

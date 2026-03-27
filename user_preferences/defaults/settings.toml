@@ -34,9 +34,10 @@ weekly_synthesis_word_limit_start = 100
 weekly_synthesis_word_limit_end = 200
 
 [arxiv]
+always_summarize_score = 90
+min_selection_score = 70
 max_papers = 3
 page_size = 100
-min_selection_score = 80
 
 [llm]
 mode = "cli"

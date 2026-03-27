@@ -37,6 +37,7 @@ class RankingSelection:
     candidate_count: int
     ranked: list[RankedPaper]
     selected: list[RankedPaper]
+    weekly_interest: list[RankedPaper]
 
 
 def _candidate_records(candidates: list[ArxivPaper]) -> list[tuple[ArxivPaper, str, str]]:
@@ -358,7 +359,7 @@ def _parse_ranked_payload(
 
 
 class PaperRanker:
-    """Rank all candidate papers with the LLM, then filter by score and cap."""
+    """Rank all candidate papers, always keep the strongest, and overflow the rest to weekly interest."""
 
     def __init__(
         self,
@@ -366,11 +367,13 @@ class PaperRanker:
         provider: Provider,
         config: LlmConfig,
         max_papers: int,
+        always_summarize_score: float,
         min_selection_score: float,
     ) -> None:
         self.provider = provider
         self.config = config
-        self.max_papers = max(1, max_papers)
+        self.max_papers = max(0, max_papers)
+        self.always_summarize_score = always_summarize_score
         self.min_selection_score = min_selection_score
 
     def rank_papers(
@@ -379,7 +382,13 @@ class PaperRanker:
         candidates: list[ArxivPaper],
     ) -> RankingSelection:
         if not candidates:
-            return RankingSelection(selected_papers=[], candidate_count=0, ranked=[], selected=[])
+            return RankingSelection(
+                selected_papers=[],
+                candidate_count=0,
+                ranked=[],
+                selected=[],
+                weekly_interest=[],
+            )
 
         dual_match_required = _requires_dual_match(preferences)
         system_prompt = _ranking_system_prompt()
@@ -420,7 +429,7 @@ class PaperRanker:
                     f"Ranking payload remained invalid after repair attempt: {repair_error}"
                 ) from repair_error
 
-        selected = [
+        eligible = [
             item
             for item in ranked
             if item.score >= self.min_selection_score
@@ -428,13 +437,20 @@ class PaperRanker:
                 not dual_match_required
                 or (item.science_match is True and item.method_match is True)
             )
-        ][: self.max_papers]
+        ]
+        always_selected = [item for item in eligible if item.score >= self.always_summarize_score]
+        fill_candidates = [item for item in eligible if item.score < self.always_summarize_score]
+        remaining_slots = max(0, self.max_papers - len(always_selected))
+        selected = always_selected + fill_candidates[:remaining_slots]
+        weekly_interest = fill_candidates[remaining_slots:]
         LOGGER.info(
-            "Ranked %s candidate(s): selected=%s threshold=%s cap=%s dual_match_required=%s",
+            "Ranked %s candidate(s): selected=%s always_threshold=%s interest_threshold=%s target_cap=%s weekly_interest=%s dual_match_required=%s",
             len(candidates),
             len(selected),
+            self.always_summarize_score,
             self.min_selection_score,
             self.max_papers,
+            len(weekly_interest),
             dual_match_required,
         )
         return RankingSelection(
@@ -442,6 +458,7 @@ class PaperRanker:
             candidate_count=len(candidates),
             ranked=ranked,
             selected=selected,
+            weekly_interest=weekly_interest,
         )
 
     def _repair_ranking_payload(

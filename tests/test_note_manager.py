@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from re_ass.note_manager import NoteManager
-from tests.support import make_app_config, make_processed_paper
+from tests.support import make_app_config, make_paper, make_processed_paper
 
 
 def test_bootstrap_prepares_output_dirs_and_weekly_note(tmp_path: Path) -> None:
@@ -67,6 +67,30 @@ def test_update_weekly_note_replaces_same_day_section(tmp_path: Path) -> None:
     assert "\n\n**Summary:** Second summary." in weekly_text
     assert "Updated synthesis." in weekly_text
     assert "Second summary." in weekly_text
+
+
+def test_update_weekly_note_appends_other_papers_of_interest_inside_day_block(tmp_path: Path) -> None:
+    manager = NoteManager(make_app_config(tmp_path))
+    manager.bootstrap()
+    summarized = make_processed_paper(tmp_path, micro_summary="First summary.")
+    interest = make_paper(
+        arxiv_id="2603.22222",
+        title="Interesting Overflow Paper",
+        authors=("Kevin Wang", "Yingjie Peng"),
+    )
+
+    manager.update_weekly_note(
+        date(2026, 3, 24),
+        [summarized],
+        "Fresh synthesis.",
+        interest_papers=[interest],
+    )
+
+    weekly_text = manager.weekly_note_path.read_text(encoding="utf-8")
+    assert "### Tuesday 24th" in weekly_text
+    assert "\n\n**Other papers of interest:**\n\n" in weekly_text
+    assert '- "*Interesting Overflow Paper*", Wang K., Peng Y., [arXiv:2603.22222](https://arxiv.org/abs/2603.22222)' in weekly_text
+    assert "**Summary:** First summary.\n\n**Other papers of interest:**" in weekly_text
 
 
 def test_update_daily_note_appends_block_when_heading_is_missing(tmp_path: Path) -> None:
@@ -185,6 +209,27 @@ def test_preview_weekly_additions_merges_new_day_without_writing_file(tmp_path: 
     assert "New summary." in preview
     weekly_text = manager.weekly_note_path.read_text(encoding="utf-8")
     assert "### Tuesday 24th" not in weekly_text
+
+
+def test_preview_weekly_additions_can_include_interest_bullets_without_touching_file(tmp_path: Path) -> None:
+    manager = NoteManager(make_app_config(tmp_path))
+    manager.bootstrap()
+    interest = make_paper(
+        arxiv_id="2603.33333",
+        title="Overflow Candidate",
+        authors=("Eduardo Banados", "Chris Ledoux", "Yuan Peng"),
+    )
+
+    preview = manager.preview_weekly_additions(
+        date(2026, 3, 24),
+        [make_processed_paper(tmp_path, micro_summary="New summary.")],
+        interest_papers=[interest],
+    )
+
+    assert "**Other papers of interest:**" in preview
+    assert '- "*Overflow Candidate*", Banados E. et al., [arXiv:2603.33333](https://arxiv.org/abs/2603.33333)' in preview
+    weekly_text = manager.weekly_note_path.read_text(encoding="utf-8")
+    assert "**Other papers of interest:**" not in weekly_text
 
 
 def test_rotate_weekly_note_archives_previous_note_on_rotation_day(tmp_path: Path) -> None:
