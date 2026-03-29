@@ -138,7 +138,7 @@ def _short_author_list(authors: tuple[str, ...]) -> str:
     if len(authors) == 1:
         return _short_author_name(authors[0])
     if len(authors) == 2:
-        return ", ".join(_short_author_name(author) for author in authors)
+        return " & ".join(_short_author_name(author) for author in authors)
     return f"{_short_author_name(authors[0])} et al."
 
 
