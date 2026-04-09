@@ -149,6 +149,19 @@ def _interest_entry(paper: ArxivPaper) -> str:
     return f"- *{title}*, {authors}, [arXiv:{source_id}]({paper.arxiv_url})"
 
 
+def _featured_entry(paper: ProcessedPaper, *, link_style: str, from_subdir: str) -> str:
+    return "\n".join(
+        [
+            (
+                f"**Title:** "
+                f"{render_link(paper.filename_stem, paper.paper.title, style=link_style, from_subdir=from_subdir)}"
+            ),
+            f"**Authors:** {_short_author_list(paper.paper.authors)}",
+            f"**Summary:** {paper.micro_summary}",
+        ]
+    )
+
+
 def _build_weekly_additions(
     existing_additions: str,
     run_date: date,
@@ -159,13 +172,7 @@ def _build_weekly_additions(
 ) -> str:
     day_heading = _format_day_heading(run_date)
     entries = [
-        "\n".join(
-            [
-                f"**Title:** {render_link(paper.filename_stem, paper.paper.title, style=link_style, from_subdir='weekly-notes')}",
-                "",
-                f"**Summary:** {paper.micro_summary}",
-            ]
-        )
+        _featured_entry(paper, link_style=link_style, from_subdir="weekly-notes")
         for paper in papers
     ]
     block_parts = [f"### {day_heading}"]
@@ -499,17 +506,13 @@ class NoteManager:
             template = self.config.daily_template.read_text(encoding="utf-8")
             text = _render_daily_template(template, note_date)
 
-        link = render_link(
-            top_paper.filename_stem,
-            top_paper.paper.title,
-            style=self.config.link_style,
-            from_subdir="daily-notes",
-        )
         block = "\n".join(
             [
-                f"**Title:** {link}",
-                "",
-                f"**Summary:** {top_paper.micro_summary}",
+                _featured_entry(
+                    top_paper,
+                    link_style=self.config.link_style,
+                    from_subdir="daily-notes",
+                ),
                 "",
                 self._weekly_note_link(note_date, reference_date),
             ]

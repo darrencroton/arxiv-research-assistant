@@ -412,7 +412,8 @@ def test_pipeline_regenerates_weekly_synthesis_from_full_week_context(tmp_path: 
                 "**Summary:** Existing summary.\n\n"
                 "---\n\n"
                 "### Wednesday 25th\n\n"
-                "**Title:** [[Bayer et al - 2026 - Wednesday Paper [arXiv 2603.30061]|Wednesday Paper]]\n\n"
+                "**Title:** [[Bayer et al - 2026 - Wednesday Paper [arXiv 2603.30061]|Wednesday Paper]]\n"
+                "**Authors:** Bayer M. & Doe J.\n"
                 "**Summary:** Summary for Wednesday Paper"
             ),
             "word_limit": 150,
@@ -446,7 +447,8 @@ def test_pipeline_writes_weekly_interest_bullets_without_leaking_them_into_synth
             "existing_synthesis": "*(A synthesis of this week's papers will be automatically generated here. Max 100 words.)*",
             "weekly_additions": (
                 "### Wednesday 25th\n\n"
-                "**Title:** [[Bayer et al - 2026 - Summarized Paper [arXiv 2603.30071]|Summarized Paper]]\n\n"
+                "**Title:** [[Bayer et al - 2026 - Summarized Paper [arXiv 2603.30071]|Summarized Paper]]\n"
+                "**Authors:** Bayer M. & Doe J.\n"
                 "**Summary:** Summary for Summarized Paper"
             ),
             "word_limit": 150,
