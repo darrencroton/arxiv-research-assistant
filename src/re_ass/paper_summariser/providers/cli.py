@@ -329,28 +329,24 @@ class GeminiCLI(CLIProvider):
 
 
 class OpencodeCLI(CLIProvider):
-    """OpenCode CLI provider (opencode run -q <prompt>).
+    """OpenCode CLI provider (opencode run <prompt>).
 
     Supports local LLMs (Ollama, LM Studio) and cloud providers via opencode's
     provider/model syntax, e.g. 'ollama/qwen2.5:14b' or 'anthropic/claude-3-5-sonnet'.
     Authentication is via env vars (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.),
     `opencode auth login`, or is not required for local models.
+    Reasoning effort is passed via --variant (provider-specific, e.g. 'high', 'max').
     """
 
     cli_command = "opencode"
-    prompt_flag = ""              # Prompt is positional after the run subcommand
-    extra_flags = ["run", "-q"]   # Non-interactive subcommand; -q suppresses the spinner
+    prompt_flag = ""           # Prompt is positional after the run subcommand
+    extra_flags = ["run"]      # Non-interactive subcommand
     model_flag = "--model"
+    effort_flag = "--variant"  # OpenCode maps reasoning effort to --variant
     default_context_size = 32_768
     default_timeout = 600
 
     _LOCAL_PREFIXES = ("ollama/", "lmstudio/")
-
-    def setup(self):
-        """Verify the CLI tool is available and warn about ignored effort config."""
-        super().setup()
-        if self.effort:
-            LOGGER.warning("[WARNING] OpenCode CLI ignores llm.effort; using OpenCode defaults.")
 
     def validate_runtime_ready(self):
         if self.model and any(self.model.startswith(p) for p in self._LOCAL_PREFIXES):

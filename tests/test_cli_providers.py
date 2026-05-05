@@ -258,7 +258,7 @@ def test_opencode_cli_builds_command_without_model(
 ) -> None:
     provider = OpencodeCLI({"timeout": 30})
 
-    assert provider._build_command("prompt") == ["opencode", "run", "-q", "prompt"]
+    assert provider._build_command("prompt") == ["opencode", "run", "prompt"]
 
 
 def test_opencode_cli_builds_command_with_model(
@@ -269,23 +269,24 @@ def test_opencode_cli_builds_command_with_model(
     assert provider._build_command("prompt") == [
         "opencode",
         "run",
-        "-q",
         "--model",
         "ollama/qwen2.5:14b",
         "prompt",
     ]
 
 
-def test_opencode_cli_ignores_effort_and_warns(
+def test_opencode_cli_builds_command_with_variant(
     cli_on_path: None,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    with caplog.at_level(logging.WARNING):
-        provider = OpencodeCLI({"timeout": 30, "effort": "high"})
+    provider = OpencodeCLI({"timeout": 30, "effort": "high"})
 
-    assert provider._build_command("prompt") == ["opencode", "run", "-q", "prompt"]
-    warning_messages = [record.message for record in caplog.records]
-    assert warning_messages == ["[WARNING] OpenCode CLI ignores llm.effort; using OpenCode defaults."]
+    assert provider._build_command("prompt") == [
+        "opencode",
+        "run",
+        "--variant",
+        "high",
+        "prompt",
+    ]
 
 
 def test_copilot_cli_requires_login_or_token(
