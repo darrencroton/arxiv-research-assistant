@@ -184,76 +184,132 @@ def test_copilot_cli_builds_command_with_effort(
     ]
 
 
-def test_opencode_cli_accepts_local_ollama_model(
+def test_opencode_cli_accepts_default_available_model(
+    monkeypatch: pytest.MonkeyPatch,
     cli_on_path: None,
 ) -> None:
+    monkeypatch.setattr(
+        "re_ass.paper_summariser.providers.cli.subprocess.run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0],
+            0,
+            stdout="opencode/gpt-5-nano\n",
+            stderr="",
+        ),
+    )
+    provider = OpencodeCLI({"timeout": 30})
+
+    provider.validate_runtime_ready()
+
+
+def test_opencode_cli_accepts_configured_local_model(
+    monkeypatch: pytest.MonkeyPatch,
+    cli_on_path: None,
+) -> None:
+    def fake_run(*args, **kwargs):
+        assert args[0] == ["opencode", "models", "ollama"]
+        return subprocess.CompletedProcess(
+            args[0],
+            0,
+            stdout="ollama/qwen2.5:14b\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr("re_ass.paper_summariser.providers.cli.subprocess.run", fake_run)
     provider = OpencodeCLI({"timeout": 30, "model": "ollama/qwen2.5:14b"})
 
     provider.validate_runtime_ready()
 
 
-def test_opencode_cli_accepts_local_lmstudio_model(
-    cli_on_path: None,
-) -> None:
-    provider = OpencodeCLI({"timeout": 30, "model": "lmstudio/my-model"})
-
-    provider.validate_runtime_ready()
-
-
-def test_opencode_cli_accepts_cloud_api_key(
+def test_opencode_cli_accepts_cloud_model_from_environment_key(
     monkeypatch: pytest.MonkeyPatch,
     cli_on_path: None,
 ) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
 
-    provider = OpencodeCLI({"timeout": 30})
+    def fake_run(*args, **kwargs):
+        assert args[0] == ["opencode", "models", "openai"]
+        assert kwargs["env"]["OPENAI_API_KEY"] == "test-key"
+        return subprocess.CompletedProcess(
+            args[0],
+            0,
+            stdout="openai/gpt-5.2\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr("re_ass.paper_summariser.providers.cli.subprocess.run", fake_run)
+    provider = OpencodeCLI({"timeout": 30, "model": "openai/gpt-5.2"})
 
     provider.validate_runtime_ready()
 
 
-def test_opencode_cli_requires_auth_when_no_local_model_or_key(
+def test_opencode_cli_requires_available_models_when_no_model_is_set(
     monkeypatch: pytest.MonkeyPatch,
     cli_on_path: None,
-    tmp_path,
 ) -> None:
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     monkeypatch.setattr(
-        "re_ass.paper_summariser.providers.cli.Path.home",
-        lambda: tmp_path,
+        "re_ass.paper_summariser.providers.cli.subprocess.run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0],
+            0,
+            stdout="",
+            stderr="",
+        ),
     )
-
     provider = OpencodeCLI({"timeout": 30})
 
-    with pytest.raises(ValueError, match=r"opencode auth login"):
+    with pytest.raises(ValueError, match=r"opencode models"):
         provider.validate_runtime_ready()
 
 
-def test_opencode_cli_accepts_auth_json(
+def test_opencode_cli_requires_provider_qualified_model_name(
+    cli_on_path: None,
+) -> None:
+    provider = OpencodeCLI({"timeout": 30, "model": "gpt-5.2"})
+
+    with pytest.raises(ValueError, match=r"provider/model"):
+        provider.validate_runtime_ready()
+
+
+def test_opencode_cli_requires_available_provider(
     monkeypatch: pytest.MonkeyPatch,
     cli_on_path: None,
-    tmp_path,
 ) -> None:
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
-
-    auth_path = tmp_path / ".local" / "share" / "opencode"
-    auth_path.mkdir(parents=True)
-    (auth_path / "auth.json").write_text('{"provider": "anthropic"}', encoding="utf-8")
-
     monkeypatch.setattr(
-        "re_ass.paper_summariser.providers.cli.Path.home",
-        lambda: tmp_path,
+        "re_ass.paper_summariser.providers.cli.subprocess.run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0],
+            1,
+            stdout="",
+            stderr="Provider not found: anthropic",
+        ),
     )
+    provider = OpencodeCLI({"timeout": 30, "model": "anthropic/claude-sonnet-4-6"})
 
-    provider = OpencodeCLI({"timeout": 30})
+    with pytest.raises(ValueError, match=r"provider 'anthropic' is not available"):
+        provider.validate_runtime_ready()
 
-    provider.validate_runtime_ready()
+
+def test_opencode_cli_requires_configured_model_to_be_listed(
+    monkeypatch: pytest.MonkeyPatch,
+    cli_on_path: None,
+) -> None:
+    monkeypatch.setattr(
+        "re_ass.paper_summariser.providers.cli.subprocess.run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0],
+            0,
+            stdout="openai/gpt-5.2\n",
+            stderr="",
+        ),
+    )
+    provider = OpencodeCLI({"timeout": 30, "model": "openai/not-a-model"})
+
+    with pytest.raises(ValueError, match=r"model 'openai/not-a-model' is not available"):
+        provider.validate_runtime_ready()
 
 
-_OPENCODE_BASE_CMD = ["opencode", "run", "--dangerously-skip-permissions", "--format", "json"]
+_OPENCODE_BASE_CMD = ["opencode", "run", "--pure", "--format", "json"]
 
 
 def test_opencode_cli_builds_command_without_model(
@@ -288,6 +344,25 @@ def test_opencode_cli_builds_command_with_variant(
         "high",
         "prompt",
     ]
+
+
+def test_opencode_cli_denies_tools_via_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    cli_on_path: None,
+) -> None:
+    captured_env = {}
+
+    def fake_run(*args, **kwargs):
+        captured_env.update(kwargs["env"])
+        return subprocess.CompletedProcess(args[0], 0, stdout="{}", stderr="")
+
+    monkeypatch.setattr("re_ass.paper_summariser.providers.cli.subprocess.run", fake_run)
+    provider = OpencodeCLI({"timeout": 30})
+
+    provider._run_command(["opencode", "run"])
+
+    assert captured_env["OPENCODE_PERMISSION"] == '"deny"'
+    assert captured_env["OPENCODE_DISABLE_DEFAULT_PLUGINS"] == "true"
 
 
 def test_opencode_cli_process_document_extracts_text_from_json_events(

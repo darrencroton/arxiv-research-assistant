@@ -1,6 +1,6 @@
 """CLI-based LLM providers for the Science Paper Summariser.
 
-Providers invoke AI CLI tools (claude, codex, gemini, copilot) via subprocess
+Providers invoke AI CLI tools (claude, codex, gemini, copilot, opencode) via subprocess
 in non-interactive mode. All CLI providers share a common base pattern: combine
 system and user prompts into a single text prompt and capture stdout.
 
@@ -8,8 +8,8 @@ CLI providers never support direct PDF input — text extraction via marker-pdf
 is always performed before the prompt is constructed.
 """
 
-import logging
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -43,6 +43,7 @@ class CLIProvider(Provider):
     default_context_size = 200_000
     default_timeout = 600
     env_blocklist = ()
+    env_overrides = {}
     readiness_timeout = 15
 
     def setup(self):
@@ -95,6 +96,7 @@ class CLIProvider(Provider):
         if apply_env_blocklist:
             for key in self.env_blocklist:
                 env.pop(key, None)
+        env.update(self.env_overrides)
 
         timeout_seconds = timeout_seconds or self.default_timeout
         command_name = cmd[0] if cmd else self.cli_command
@@ -332,22 +334,23 @@ class GeminiCLI(CLIProvider):
 class OpencodeCLI(CLIProvider):
     """OpenCode CLI provider (opencode run <prompt>).
 
-    Supports local LLMs (Ollama, LM Studio) and cloud providers via opencode's
-    provider/model syntax, e.g. 'ollama/qwen2.5:14b' or 'anthropic/claude-3-5-sonnet'.
-    Authentication is via env vars (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.),
-    `opencode auth login`, or is not required for local models.
+    Supports any model exposed by `opencode models`, including local providers
+    configured in opencode.json and cloud providers authenticated via env vars
+    or `opencode auth login`.
     Reasoning effort is passed via --variant (provider-specific, e.g. 'high', 'max').
     """
 
     cli_command = "opencode"
-    prompt_flag = ""           # Prompt is positional after the run subcommand
-    extra_flags = ["run", "--dangerously-skip-permissions", "--format", "json"]
+    prompt_flag = ""  # Prompt is positional after the run subcommand
+    extra_flags = ["run", "--pure", "--format", "json"]
     model_flag = "--model"
     effort_flag = "--variant"  # OpenCode maps reasoning effort to --variant
     default_context_size = 32_768
     default_timeout = 600
-
-    _LOCAL_PREFIXES = ("ollama/", "lmstudio/")
+    env_overrides = {
+        "OPENCODE_PERMISSION": json.dumps("deny"),
+        "OPENCODE_DISABLE_DEFAULT_PLUGINS": "true",
+    }
 
     def process_document(self, content, is_pdf, system_prompt, user_prompt, max_tokens=12288):
         """Process document via opencode and extract assistant text from JSON events."""
@@ -386,25 +389,40 @@ class OpencodeCLI(CLIProvider):
         return output
 
     def validate_runtime_ready(self):
-        if self.model and any(self.model.startswith(p) for p in self._LOCAL_PREFIXES):
+        if not self.model:
+            result = self._run_readiness_check([self.cli_command, "models"])
+            if result.returncode == 0 and result.stdout.strip():
+                return
+            raise ValueError(
+                "OpenCode CLI is installed but no models are available. "
+                "Run `opencode auth login` or configure a local provider in opencode.json, "
+                "then verify with `opencode models` before running `re-ass`."
+            )
+
+        if "/" not in self.model:
+            raise ValueError(
+                "OpenCode CLI model names must use provider/model syntax, "
+                f"got '{self.model}'. Run `opencode models` to choose a valid model."
+            )
+
+        provider_name = self.model.split("/", 1)[0]
+        result = self._run_readiness_check([self.cli_command, "models", provider_name])
+        if result.returncode != 0:
+            error_snippet = self._get_error_output(result)
+            raise ValueError(
+                f"OpenCode CLI provider '{provider_name}' is not available: {error_snippet}. "
+                "Run `opencode auth login`, set the provider's API key environment variable, "
+                "or configure the provider in opencode.json. Verify with `opencode models` before running `re-ass`."
+            )
+
+        available_models = {line.strip() for line in result.stdout.splitlines() if line.strip()}
+        if self.model in available_models:
             return
 
-        for env_var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY"):
-            if os.getenv(env_var):
-                return
-
-        for auth_path in [
-            Path.home() / ".local" / "share" / "opencode" / "auth.json",
-            Path.home() / "Library" / "Application Support" / "opencode" / "auth.json",
-        ]:
-            if auth_path.exists() and auth_path.stat().st_size > 0:
-                return
-
         raise ValueError(
-            "OpenCode CLI is installed but not authenticated. "
-            "For local models, set llm.model to 'ollama/model_name' or 'lmstudio/model_name'. "
-            "For cloud providers, run `opencode auth login` or set the relevant API key "
-            "(ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, etc.) before running `re-ass`."
+            f"OpenCode CLI model '{self.model}' is not available. "
+            f"Run `opencode models {provider_name}` to choose a valid model, "
+            "or update your opencode provider configuration."
         )
 
     def _error_hint(self, error_output):

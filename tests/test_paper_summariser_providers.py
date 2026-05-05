@@ -1,6 +1,6 @@
 import pytest
 
-from re_ass.paper_summariser.providers import create_provider
+from re_ass.paper_summariser.providers import create_provider, get_supported_provider_names
 
 
 def test_create_provider_builds_cli_provider(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -11,6 +11,10 @@ def test_create_provider_builds_cli_provider(monkeypatch: pytest.MonkeyPatch) ->
     assert provider.mode == "cli"
     assert provider.provider_name == "codex"
     assert provider.model == "gpt-5.4"
+
+
+def test_supported_cli_providers_include_opencode() -> None:
+    assert "opencode" in get_supported_provider_names("cli")
 
 
 def test_create_provider_rejects_missing_api_key(monkeypatch: pytest.MonkeyPatch) -> None:

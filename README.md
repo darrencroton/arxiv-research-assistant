@@ -46,25 +46,26 @@ Common provider setups:
 - CLI `codex`: `mode = "cli"`, `provider = "codex"`, then run `codex login`, or `printenv OPENAI_API_KEY | codex login --with-api-key`
 - CLI `copilot`: `mode = "cli"`, `provider = "copilot"`, then run `copilot login`, or set `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, or `GITHUB_TOKEN`
 - CLI `gemini`: `mode = "cli"`, `provider = "gemini"`, then set `GEMINI_API_KEY`, or use Vertex AI credentials
-- CLI `opencode`: `mode = "cli"`, `provider = "opencode"`, then set `model` to `ollama/model_name` or `lmstudio/model_name` for local LLMs; for cloud providers run `opencode auth login` or set the relevant API key
+- CLI `opencode`: `mode = "cli"`, `provider = "opencode"`, then choose a provider-qualified model from `opencode models`; for cloud providers run `opencode auth login` or set the relevant API key, and for local providers configure them in `opencode.json`
 - API `claude`: `mode = "api"`, `provider = "claude"`, then set `ANTHROPIC_API_KEY`
 - API `openai`: `mode = "api"`, `provider = "openai"`, then set `OPENAI_API_KEY`
 - API `gemini`: `mode = "api"`, `provider = "gemini"`, then set `GOOGLE_API_KEY`
 - API `perplexity`: `mode = "api"`, `provider = "perplexity"`, then set `PERPLEXITY_API_KEY`
 - API `ollama`: `mode = "api"`, `provider = "ollama"`, and use `ollama_base_url` if you need a non-default local endpoint
 
-OpenCode supports local LLMs as well as cloud providers. Use provider-qualified model names so that OpenCode routes to the right backend:
+OpenCode supports local LLMs as well as cloud providers. Use provider-qualified model names from `opencode models` so that OpenCode routes to the right backend:
 
 ```toml
 [llm]
 mode = "cli"
 provider = "opencode"
-model = "ollama/qwen2.5:14b"   # local model via Ollama
-# model = "lmstudio/my-model"  # local model via LM Studio
+model = "opencode/gpt-5-nano"  # OpenCode-hosted model
+# model = "ollama/qwen2.5:14b" # local model via configured Ollama provider
+# model = "lmstudio/google/gemma-3n-e4b" # local model via configured LM Studio provider
 # model = "anthropic/claude-sonnet-4-5"  # cloud provider
 ```
 
-Install OpenCode from [opencode.ai](https://opencode.ai). For local models no API key is needed; for cloud providers either run `opencode auth login` or set the relevant provider API key (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`, etc.).
+Install OpenCode from [opencode.ai](https://opencode.ai). For local models, configure the local provider in `opencode.json` and verify it appears in `opencode models`. For cloud providers, either run `opencode auth login` or set the relevant provider API key (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`, etc.). `re-ass` runs OpenCode in non-interactive JSON mode with OpenCode tools/plugins denied so paper content cannot trigger shell, edit, read, web, or plugin actions.
 
 Example:
 
