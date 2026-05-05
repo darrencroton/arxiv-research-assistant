@@ -9,6 +9,7 @@ is always performed before the prompt is constructed.
 """
 
 import logging
+import json
 import os
 import shutil
 import subprocess
@@ -340,13 +341,49 @@ class OpencodeCLI(CLIProvider):
 
     cli_command = "opencode"
     prompt_flag = ""           # Prompt is positional after the run subcommand
-    extra_flags = ["run"]      # Non-interactive subcommand
+    extra_flags = ["run", "--dangerously-skip-permissions", "--format", "json"]
     model_flag = "--model"
     effort_flag = "--variant"  # OpenCode maps reasoning effort to --variant
     default_context_size = 32_768
     default_timeout = 600
 
     _LOCAL_PREFIXES = ("ollama/", "lmstudio/")
+
+    def process_document(self, content, is_pdf, system_prompt, user_prompt, max_tokens=12288):
+        """Process document via opencode and extract assistant text from JSON events."""
+        combined_prompt = f"{system_prompt}\n\n{user_prompt}"
+        cmd = self._build_command(combined_prompt)
+
+        logging.info(
+            f"Invoking {self.cli_command} CLI "
+            f"(prompt: {len(combined_prompt)} chars, timeout: {int(self.config.get('timeout', self.default_timeout))}s)"
+        )
+
+        result = self._run_command(cmd)
+
+        if result.returncode != 0:
+            raise RuntimeError(self._format_command_failure(result))
+
+        parts = []
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") == "text":
+                text = (event.get("part") or {}).get("text", "")
+                if text:
+                    parts.append(text)
+
+        output = "".join(parts)
+        if not output.strip():
+            raise ValueError(f"{self.cli_command} returned empty output")
+
+        logging.info(f"{self.cli_command} CLI returned {len(output)} chars")
+        return output
 
     def validate_runtime_ready(self):
         if self.model and any(self.model.startswith(p) for p in self._LOCAL_PREFIXES):

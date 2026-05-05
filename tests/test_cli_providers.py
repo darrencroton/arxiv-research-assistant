@@ -253,12 +253,15 @@ def test_opencode_cli_accepts_auth_json(
     provider.validate_runtime_ready()
 
 
+_OPENCODE_BASE_CMD = ["opencode", "run", "--dangerously-skip-permissions", "--format", "json"]
+
+
 def test_opencode_cli_builds_command_without_model(
     cli_on_path: None,
 ) -> None:
     provider = OpencodeCLI({"timeout": 30})
 
-    assert provider._build_command("prompt") == ["opencode", "run", "prompt"]
+    assert provider._build_command("prompt") == [*_OPENCODE_BASE_CMD, "prompt"]
 
 
 def test_opencode_cli_builds_command_with_model(
@@ -267,8 +270,7 @@ def test_opencode_cli_builds_command_with_model(
     provider = OpencodeCLI({"timeout": 30, "model": "ollama/qwen2.5:14b"})
 
     assert provider._build_command("prompt") == [
-        "opencode",
-        "run",
+        *_OPENCODE_BASE_CMD,
         "--model",
         "ollama/qwen2.5:14b",
         "prompt",
@@ -281,12 +283,36 @@ def test_opencode_cli_builds_command_with_variant(
     provider = OpencodeCLI({"timeout": 30, "effort": "high"})
 
     assert provider._build_command("prompt") == [
-        "opencode",
-        "run",
+        *_OPENCODE_BASE_CMD,
         "--variant",
         "high",
         "prompt",
     ]
+
+
+def test_opencode_cli_process_document_extracts_text_from_json_events(
+    monkeypatch: pytest.MonkeyPatch,
+    cli_on_path: None,
+) -> None:
+    ndjson = "\n".join([
+        '{"type":"step_start","timestamp":1,"sessionID":"s1","part":{}}',
+        '{"type":"text","timestamp":2,"sessionID":"s1","part":{"text":"Hello "}}',
+        '{"type":"tool_use","timestamp":3,"sessionID":"s1","part":{}}',
+        '{"type":"text","timestamp":4,"sessionID":"s1","part":{"text":"world."}}',
+        '{"type":"step_finish","timestamp":5,"sessionID":"s1","part":{}}',
+    ])
+    provider = OpencodeCLI({"timeout": 30})
+    monkeypatch.setattr(
+        provider,
+        "_run_command",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            ["opencode"], 0, stdout=ndjson, stderr=""
+        ),
+    )
+
+    result = provider.process_document("", False, "system", "user")
+
+    assert result == "Hello world."
 
 
 def test_copilot_cli_requires_login_or_token(
