@@ -16,7 +16,7 @@ import shutil
 from dotenv import load_dotenv
 
 from .api import ClaudeAPI, OpenAIAPI, GeminiAPI, PerplexityAPI, OllamaAPI
-from .cli import ClaudeCLI, CodexCLI, GeminiCLI, CopilotCLI
+from .cli import ClaudeCLI, CodexCLI, GeminiCLI, CopilotCLI, OpencodeCLI
 
 load_dotenv()
 
@@ -25,6 +25,7 @@ _CLI_PROVIDERS = {
     "gemini": GeminiCLI,
     "codex": CodexCLI,
     "copilot": CopilotCLI,
+    "opencode": OpencodeCLI,
 }
 
 _API_PROVIDERS = {

@@ -3,7 +3,7 @@ import logging
 
 import pytest
 
-from re_ass.paper_summariser.providers.cli import ClaudeCLI, CodexCLI, CopilotCLI, GeminiCLI
+from re_ass.paper_summariser.providers.cli import ClaudeCLI, CodexCLI, CopilotCLI, GeminiCLI, OpencodeCLI
 
 
 @pytest.fixture
@@ -182,6 +182,110 @@ def test_copilot_cli_builds_command_with_effort(
         "-p",
         "prompt",
     ]
+
+
+def test_opencode_cli_accepts_local_ollama_model(
+    cli_on_path: None,
+) -> None:
+    provider = OpencodeCLI({"timeout": 30, "model": "ollama/qwen2.5:14b"})
+
+    provider.validate_runtime_ready()
+
+
+def test_opencode_cli_accepts_local_lmstudio_model(
+    cli_on_path: None,
+) -> None:
+    provider = OpencodeCLI({"timeout": 30, "model": "lmstudio/my-model"})
+
+    provider.validate_runtime_ready()
+
+
+def test_opencode_cli_accepts_cloud_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+    cli_on_path: None,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    provider = OpencodeCLI({"timeout": 30})
+
+    provider.validate_runtime_ready()
+
+
+def test_opencode_cli_requires_auth_when_no_local_model_or_key(
+    monkeypatch: pytest.MonkeyPatch,
+    cli_on_path: None,
+    tmp_path,
+) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.setattr(
+        "re_ass.paper_summariser.providers.cli.Path.home",
+        lambda: tmp_path,
+    )
+
+    provider = OpencodeCLI({"timeout": 30})
+
+    with pytest.raises(ValueError, match=r"opencode auth login"):
+        provider.validate_runtime_ready()
+
+
+def test_opencode_cli_accepts_auth_json(
+    monkeypatch: pytest.MonkeyPatch,
+    cli_on_path: None,
+    tmp_path,
+) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+
+    auth_path = tmp_path / ".local" / "share" / "opencode"
+    auth_path.mkdir(parents=True)
+    (auth_path / "auth.json").write_text('{"provider": "anthropic"}', encoding="utf-8")
+
+    monkeypatch.setattr(
+        "re_ass.paper_summariser.providers.cli.Path.home",
+        lambda: tmp_path,
+    )
+
+    provider = OpencodeCLI({"timeout": 30})
+
+    provider.validate_runtime_ready()
+
+
+def test_opencode_cli_builds_command_without_model(
+    cli_on_path: None,
+) -> None:
+    provider = OpencodeCLI({"timeout": 30})
+
+    assert provider._build_command("prompt") == ["opencode", "run", "-q", "prompt"]
+
+
+def test_opencode_cli_builds_command_with_model(
+    cli_on_path: None,
+) -> None:
+    provider = OpencodeCLI({"timeout": 30, "model": "ollama/qwen2.5:14b"})
+
+    assert provider._build_command("prompt") == [
+        "opencode",
+        "run",
+        "-q",
+        "--model",
+        "ollama/qwen2.5:14b",
+        "prompt",
+    ]
+
+
+def test_opencode_cli_ignores_effort_and_warns(
+    cli_on_path: None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING):
+        provider = OpencodeCLI({"timeout": 30, "effort": "high"})
+
+    assert provider._build_command("prompt") == ["opencode", "run", "-q", "prompt"]
+    warning_messages = [record.message for record in caplog.records]
+    assert warning_messages == ["[WARNING] OpenCode CLI ignores llm.effort; using OpenCode defaults."]
 
 
 def test_copilot_cli_requires_login_or_token(

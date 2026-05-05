@@ -328,6 +328,63 @@ class GeminiCLI(CLIProvider):
         return None
 
 
+class OpencodeCLI(CLIProvider):
+    """OpenCode CLI provider (opencode run -q <prompt>).
+
+    Supports local LLMs (Ollama, LM Studio) and cloud providers via opencode's
+    provider/model syntax, e.g. 'ollama/qwen2.5:14b' or 'anthropic/claude-3-5-sonnet'.
+    Authentication is via env vars (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.),
+    `opencode auth login`, or is not required for local models.
+    """
+
+    cli_command = "opencode"
+    prompt_flag = ""              # Prompt is positional after the run subcommand
+    extra_flags = ["run", "-q"]   # Non-interactive subcommand; -q suppresses the spinner
+    model_flag = "--model"
+    default_context_size = 32_768
+    default_timeout = 600
+
+    _LOCAL_PREFIXES = ("ollama/", "lmstudio/")
+
+    def setup(self):
+        """Verify the CLI tool is available and warn about ignored effort config."""
+        super().setup()
+        if self.effort:
+            LOGGER.warning("[WARNING] OpenCode CLI ignores llm.effort; using OpenCode defaults.")
+
+    def validate_runtime_ready(self):
+        if self.model and any(self.model.startswith(p) for p in self._LOCAL_PREFIXES):
+            return
+
+        for env_var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY"):
+            if os.getenv(env_var):
+                return
+
+        for auth_path in [
+            Path.home() / ".local" / "share" / "opencode" / "auth.json",
+            Path.home() / "Library" / "Application Support" / "opencode" / "auth.json",
+        ]:
+            if auth_path.exists() and auth_path.stat().st_size > 0:
+                return
+
+        raise ValueError(
+            "OpenCode CLI is installed but not authenticated. "
+            "For local models, set llm.model to 'ollama/model_name' or 'lmstudio/model_name'. "
+            "For cloud providers, run `opencode auth login` or set the relevant API key "
+            "(ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, etc.) before running `re-ass`."
+        )
+
+    def _error_hint(self, error_output):
+        lowered = error_output.lower()
+        if any(kw in lowered for kw in ("not authenticated", "api key", "auth", "unauthorized")):
+            return (
+                "Run `opencode auth login`, or set the relevant API key "
+                "(ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.) before running `re-ass`. "
+                "For local models, set llm.model to 'ollama/model_name' or 'lmstudio/model_name'."
+            )
+        return None
+
+
 class CopilotCLI(CLIProvider):
     """GitHub Copilot CLI provider.
 
