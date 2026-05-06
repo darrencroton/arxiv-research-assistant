@@ -222,6 +222,7 @@ Only install automation after a manual run succeeds. For setup, schedule customi
 
 - If setup reports that provider validation was skipped for the freshly bootstrapped default config, edit `[llm]` in `user_preferences/settings.toml` and rerun `./scripts/setup.sh`.
 - If setup or a manual run fails after you have chosen a provider, that provider is usually not installed or not authenticated for non-interactive use yet.
+- If PDF-to-Markdown extraction produces malformed long lines, `re-ass` removes those low-value lines before prompting; if an extracted-text prompt is still too large, it drops references first, then appendices.
 - If a scheduled run does not behave as expected, check `logs/last-run.log`, `logs/launchd.stdout.log`, and `logs/launchd.stderr.log`.
 - If `re-ass` writes its managed section at the end of a note instead of where you expected it, your template heading does not exactly match the configured heading text.
 - Machine-readable diagnostics are written to `state/runs/`.

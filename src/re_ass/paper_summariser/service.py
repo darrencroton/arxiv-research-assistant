@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import concurrent.futures
 from dataclasses import dataclass
 from datetime import timezone
@@ -32,11 +33,30 @@ load_dotenv()
 LOGGER = logging.getLogger(__name__)
 _KNOWLEDGE_DIR = Path(__file__).resolve().parent / "project_knowledge"
 _SOURCE_SCAN_CHAR_LIMIT = 4000
+_EXTRACTION_NOISE_LINE_CHAR_LIMIT = 1000
+_DEFAULT_PROMPT_CHAR_BUDGET = 300_000
+_REFERENCE_SECTION_TITLES = {
+    "BIBLIOGRAPHY",
+    "LITERATURE CITED",
+    "NOTES AND REFERENCES",
+    "REFERENCE",
+    "REFERENCES",
+    "REFERENCES AND NOTES",
+    "REFERENCES CITED",
+    "WORKS CITED",
+}
+_APPENDIX_SECTION_TITLES = {
+    "APPENDICES",
+    "APPENDIX",
+    "SUPPLEMENTARY MATERIAL",
+    "SUPPLEMENTARY MATERIALS",
+}
 _marker_models = None
 
 ARXIV_FILENAME_RE = re.compile(
     r"(?P<id>\d{4}\.\d{4,5}(?:v\d+)?|[A-Za-z.-]+/\d{7}(?:v\d+)?)"
 )
+_MARKDOWN_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+(?P<title>.+?)\s*#*\s*$")
 ARXIV_TEXT_RE = re.compile(
     r"(?:arxiv\s*:\s*|arxiv\.org/(?:abs|pdf)/)"
     r"(?P<id>\d{4}\.\d{4,5}(?:v\d+)?|[A-Za-z.-]+/\d{7}(?:v\d+)?)",
@@ -198,7 +218,9 @@ class PaperSummariser:
             project_knowledge.keywords,
             project_knowledge.system_prompt_template,
         )
-        user_prompt = create_user_prompt(
+        paper_text, user_prompt = fit_prompt_to_provider_budget(
+            self.provider,
+            system_prompt,
             paper_text,
             project_knowledge.paper_summary_template,
             project_knowledge.user_prompt_template,
@@ -238,6 +260,184 @@ def read_project_knowledge() -> ProjectKnowledge:
         paper_summary_template=summary_template_path.read_text(encoding="utf-8"),
         system_prompt_template=system_prompt_path.read_text(encoding="utf-8"),
         user_prompt_template=user_prompt_path.read_text(encoding="utf-8"),
+    )
+
+
+def _is_extraction_noise_line(line: str) -> bool:
+    """Return True for long marker-pdf conversion lines with little prose value."""
+    if len(line) <= _EXTRACTION_NOISE_LINE_CHAR_LIMIT:
+        return False
+
+    stripped = line.strip()
+    if not stripped:
+        return True
+
+    alpha_chars = sum(char.isalpha() for char in stripped)
+    alpha_ratio = alpha_chars / len(stripped)
+    separator_chars = sum(char in "|-_=+·. " for char in stripped)
+    separator_ratio = separator_chars / len(stripped)
+    html_breaks = stripped.count("<br>")
+
+    return (
+        stripped.count("|") >= 2
+        or html_breaks >= 20
+        or separator_ratio > 0.85
+        or alpha_ratio < 0.08
+    )
+
+
+def normalise_extracted_text(text: str, *, source_name: str = "document") -> str:
+    """Remove extraction artefacts that can overwhelm LLM context windows."""
+    if not text:
+        return text
+
+    kept_lines = []
+    removed_lines = 0
+    removed_chars = 0
+
+    for line in text.splitlines():
+        if _is_extraction_noise_line(line):
+            removed_lines += 1
+            removed_chars += len(line) + 1
+            continue
+        kept_lines.append(line)
+
+    if removed_lines:
+        LOGGER.info(
+            "Removed %s noisy extraction lines from %s (~%s chars).",
+            removed_lines,
+            source_name,
+            removed_chars,
+        )
+        return "\n".join(kept_lines)
+
+    return text
+
+
+def _get_prompt_char_budget(provider: Provider) -> int:
+    configured_budget = getattr(provider, "config", {}).get("max_prompt_chars")
+    if configured_budget:
+        return int(configured_budget)
+    return _DEFAULT_PROMPT_CHAR_BUDGET
+
+
+def _combined_prompt_chars(system_prompt: str, user_prompt: str) -> int:
+    return len(f"{system_prompt}\n\n{user_prompt}")
+
+
+def _normalise_section_title(line: str) -> str:
+    if match := _MARKDOWN_HEADING_RE.match(line):
+        title = match.group("title")
+    else:
+        title = line
+    title = title.strip().strip("*_`")
+    title = re.sub(r"\s+", " ", title)
+    title = re.sub(r"[\s:.;-]+$", "", title)
+    return title.upper()
+
+
+def _is_matching_section_heading(
+    line: str,
+    section_titles: set[str],
+    *,
+    section_prefixes: tuple[str, ...] = (),
+) -> bool:
+    title = _normalise_section_title(line)
+    if title in section_titles:
+        return True
+    return any(title.startswith(prefix) for prefix in section_prefixes)
+
+
+def _is_references_heading(line: str) -> bool:
+    return _is_matching_section_heading(line, _REFERENCE_SECTION_TITLES)
+
+
+def _is_appendix_heading(line: str) -> bool:
+    return _is_matching_section_heading(
+        line,
+        _APPENDIX_SECTION_TITLES,
+        section_prefixes=("APPENDIX ", "APPENDICES "),
+    )
+
+
+def _drop_section_and_following(paper_text: str, heading_matcher: Callable[[str], bool]) -> str:
+    output = []
+    for line in paper_text.splitlines():
+        if heading_matcher(line):
+            break
+        output.append(line)
+    return "\n".join(output)
+
+
+def _drop_references_section(paper_text: str) -> str:
+    return _drop_section_and_following(paper_text, _is_references_heading)
+
+
+def _drop_appendix_section(paper_text: str) -> str:
+    return _drop_section_and_following(paper_text, _is_appendix_heading)
+
+
+def fit_prompt_to_provider_budget(
+    provider: Provider,
+    system_prompt: str,
+    paper_text: str,
+    template: str,
+    prompt_template: str,
+    *,
+    source_metadata: SourceMetadata | None = None,
+) -> tuple[str, str]:
+    """Build a user prompt, removing low-value sections only if needed."""
+    user_prompt = create_user_prompt(
+        paper_text,
+        template,
+        prompt_template,
+        source_metadata=source_metadata,
+    )
+    budget = _get_prompt_char_budget(provider)
+    combined_chars = _combined_prompt_chars(system_prompt, user_prompt)
+    if combined_chars <= budget:
+        return paper_text, user_prompt
+
+    LOGGER.warning(
+        "Combined prompt is %s chars, above %s budget of %s chars. Applying fallback prompt reduction.",
+        combined_chars,
+        getattr(provider, "provider_name", provider.__class__.__name__),
+        budget,
+    )
+
+    reduced_text = paper_text
+    for label, reducer in (
+        ("references", _drop_references_section),
+        ("appendix", _drop_appendix_section),
+    ):
+        candidate_text = reducer(reduced_text)
+        if candidate_text == reduced_text:
+            continue
+
+        candidate_prompt = create_user_prompt(
+            candidate_text,
+            template,
+            prompt_template,
+            source_metadata=source_metadata,
+        )
+        candidate_chars = _combined_prompt_chars(system_prompt, candidate_prompt)
+        LOGGER.info(
+            "Prompt reduction dropped %s: %s -> %s combined chars.",
+            label,
+            combined_chars,
+            candidate_chars,
+        )
+        reduced_text = candidate_text
+        user_prompt = candidate_prompt
+        combined_chars = candidate_chars
+
+        if combined_chars <= budget:
+            return reduced_text, user_prompt
+
+    raise PaperSummariserError(
+        f"Combined prompt is {combined_chars} chars after cleanup, above "
+        f"{getattr(provider, 'provider_name', provider.__class__.__name__)} "
+        f"budget of {budget} chars."
     )
 
 
@@ -300,12 +500,14 @@ def read_input_file(
                     ) from error
 
             text, _, _ = text_from_rendered(rendered)
+            text = normalise_extracted_text(text, source_name=file_path.name)
             LOGGER.info("Extracted ~%s words from PDF", len(text.split()))
             return text, None
 
         if file_suffix == ".txt":
             LOGGER.info("Reading text file: %s", file_path.name)
-            return file_path.read_text(encoding="utf-8"), None
+            text = file_path.read_text(encoding="utf-8")
+            return normalise_extracted_text(text, source_name=file_path.name), None
 
         return None, f"Unsupported file type: {file_path.suffix}"
     except Exception as error:  # pragma: no cover - exercised by integration paths
