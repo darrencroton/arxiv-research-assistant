@@ -12,6 +12,11 @@ state/
 logs/
 tmp/
 
+output-*/
+state-*/
+logs-*/
+tmp-*/
+
 .claude/
 .ai-orchestrator/
 CLAUDE.md
