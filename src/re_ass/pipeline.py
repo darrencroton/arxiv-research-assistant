@@ -200,6 +200,13 @@ def _scheduled_note_dates(invocation_date: date, count: int) -> list[date]:
     return note_dates
 
 
+def _next_weekday(day: date) -> date:
+    candidate = day + timedelta(days=1)
+    while candidate.weekday() >= 5:
+        candidate += timedelta(days=1)
+    return candidate
+
+
 def _note_dates_for_pending(invocation_date: date, announcement_dates: list[date]) -> dict[date, date]:
     if not announcement_dates:
         return {}
@@ -467,13 +474,25 @@ def run(config: AppConfig, run_date: date | None = None, *, backfill: bool = Fal
         if backfill:
             pending_dates = [invocation_date]
             note_date_map = {invocation_date: invocation_date}
+            ready_dates = pending_dates
         else:
             last_completed_announcement_date = state_store.load_completed_announcement_date()
             pending_dates = _pending_announcement_dates(
                 available_dates,
                 last_completed_announcement_date=last_completed_announcement_date,
             )
-            note_date_map = _note_dates_for_pending(invocation_date, pending_dates)
+            if config.shift_announcements_to_next_weekday:
+                note_date_map = {
+                    announcement_date: _next_weekday(announcement_date)
+                    for announcement_date in pending_dates
+                }
+            else:
+                note_date_map = _note_dates_for_pending(invocation_date, pending_dates)
+            ready_dates = [
+                announcement_date
+                for announcement_date in pending_dates
+                if note_date_map[announcement_date] <= invocation_date
+            ]
 
         _populate_run_summary_dates(
             overall_summary,
@@ -490,8 +509,13 @@ def run(config: AppConfig, run_date: date | None = None, *, backfill: bool = Fal
             LOGGER.info("No new announcement day is available to process.")
             state_store.save_run_summary(overall_summary, label="overall")
             return 0
+        if not ready_dates:
+            LOGGER.info("No pending announcement day maps to a note date on or before %s.", invocation_date.isoformat())
+            state_store.save_run_summary(overall_summary, label="overall")
+            return 0
 
-        for announcement_date in pending_dates:
+        dates_to_process = ready_dates
+        for announcement_date in dates_to_process:
             note_date = note_date_map[announcement_date]
             exit_code = _run_announcement_day(
                 config,

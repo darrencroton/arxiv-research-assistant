@@ -115,6 +115,7 @@ def test_load_config_uses_new_runtime_sections(tmp_path: Path) -> None:
     assert config.weekly_additions_heading == "## DAILY ADDITIONS"
     assert config.weekly_synthesis_word_limit_start == 100
     assert config.weekly_synthesis_word_limit_end == 200
+    assert config.shift_announcements_to_next_weekday is True
     assert config.llm.effort is None
     assert config.llm.prompt_debug_file == (tmp_path / "tmp" / "paper_summariser" / "prompt.txt").resolve()
 
@@ -184,6 +185,7 @@ def test_load_config_supports_markdown_links_rotation_day_and_managed_headings(t
         "[notes]\n"
         "link_style = 'markdown'\n"
         "rotation_day = 'sunday'\n"
+        "shift_announcements_to_next_weekday = false\n"
         "daily_top_paper_heading = '## Featured Paper'\n"
         "weekly_synthesis_heading = '## Weekly Summary'\n"
         "weekly_additions_heading = '## Added This Week'\n",
@@ -194,6 +196,7 @@ def test_load_config_supports_markdown_links_rotation_day_and_managed_headings(t
 
     assert config.link_style == "markdown"
     assert config.rotation_day == "sunday"
+    assert config.shift_announcements_to_next_weekday is False
     assert config.daily_top_paper_heading == "## Featured Paper"
     assert config.weekly_synthesis_heading == "## Weekly Summary"
     assert config.weekly_additions_heading == "## Added This Week"
@@ -266,6 +269,21 @@ def test_load_config_rejects_invalid_rotation_day(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ValueError, match="notes.rotation_day"):
+        load_config(config_path)
+
+
+def test_load_config_rejects_non_boolean_announcement_shift(tmp_path: Path) -> None:
+    config_path = tmp_path / "settings.toml"
+    config_path.write_text(
+        "[notes]\n"
+        "shift_announcements_to_next_weekday = 'yes'\n"
+        'daily_top_paper_heading = "## TODAY\'S TOP PAPER"\n'
+        'weekly_synthesis_heading = "## SYNTHESIS"\n'
+        'weekly_additions_heading = "## DAILY ADDITIONS"\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="shift_announcements_to_next_weekday"):
         load_config(config_path)
 
 

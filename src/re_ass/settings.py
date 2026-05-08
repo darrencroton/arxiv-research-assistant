@@ -98,6 +98,7 @@ class AppConfig:
     link_style: str
     weekly_note_file: str
     rotation_day: str
+    shift_announcements_to_next_weekday: bool
     archive_name_pattern: str
     daily_top_paper_heading: str
     weekly_synthesis_heading: str
@@ -175,6 +176,13 @@ def _optional_stripped_string(raw_value: object) -> str | None:
     return value or None
 
 
+def _bool_setting(data: dict[str, object], key: str, section_name: str, *, default: bool) -> bool:
+    raw_value = data.get(key, default)
+    if isinstance(raw_value, bool):
+        return raw_value
+    raise ValueError(f"Setting [{section_name}].{key} must be true or false.")
+
+
 def load_config(config_path: Path | None = None, project_root: Path | None = None) -> AppConfig:
     """Load and validate application configuration from settings.toml."""
     root = (project_root or _default_project_root()).resolve()
@@ -243,6 +251,12 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
     rotation_day = str(notes_data.get("rotation_day", "monday")).strip().lower()
     if rotation_day not in _VALID_ROTATION_DAYS:
         raise ValueError(f"notes.rotation_day must be one of {_VALID_ROTATION_DAYS}, got '{rotation_day}'.")
+    shift_announcements_to_next_weekday = _bool_setting(
+        notes_data,
+        "shift_announcements_to_next_weekday",
+        "notes",
+        default=True,
+    )
     archive_name_pattern = str(notes_data.get("archive_name_pattern", "{date}-weekly-arxiv.md"))
     daily_top_paper_heading = _required_string(notes_data, "daily_top_paper_heading", "notes")
     weekly_synthesis_heading = _required_string(notes_data, "weekly_synthesis_heading", "notes")
@@ -327,6 +341,7 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
         link_style=link_style,
         weekly_note_file=weekly_note_file,
         rotation_day=rotation_day,
+        shift_announcements_to_next_weekday=shift_announcements_to_next_weekday,
         archive_name_pattern=archive_name_pattern,
         daily_top_paper_heading=daily_top_paper_heading,
         weekly_synthesis_heading=weekly_synthesis_heading,

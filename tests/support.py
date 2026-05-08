@@ -66,6 +66,7 @@ def make_app_config(tmp_path: Path, **overrides) -> AppConfig:
         link_style="wikilink",
         weekly_note_file="this-weeks-arxiv-papers.md",
         rotation_day="monday",
+        shift_announcements_to_next_weekday=False,
         archive_name_pattern="{date}-weekly-arxiv.md",
         daily_top_paper_heading="## TODAY'S TOP PAPER",
         weekly_synthesis_heading="## SYNTHESIS",

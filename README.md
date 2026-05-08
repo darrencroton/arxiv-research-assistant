@@ -36,7 +36,7 @@ This file controls:
 - `[output]`: where summaries, notes, and PDFs are written
 - `[templates]`: which daily and weekly templates to use
 - `[preferences]`: which preferences file to read
-- `[notes]`: link style, weekly filename, rotation day, archive naming, and managed headings
+- `[notes]`: link style, weekly filename, rotation day, announcement-to-note date mapping, archive naming, and managed headings
 - `[arxiv]`: fetch limits, ranking thresholds, and the target number of full summaries
 - `[llm]`: provider mode, provider name, model, and optional reasoning effort
 
@@ -179,7 +179,9 @@ Automatic runs are driven by arXiv announcement days, not by a rolling timestamp
 - cross-listed papers are deduplicated by arXiv ID
 - all candidates for an announcement day are ranked together in one pass
 - if `re-ass` was down, the next run can catch up on the visible missed announcement days in order
-- automatic catch-up fills weekday daily notes backwards from the run date, skipping weekends
+- by default, `notes.shift_announcements_to_next_weekday = true` writes each arXiv announcement day into the next local weekday note, so a Friday announcement lands in Monday's note
+- if that setting is `false`, automatic catch-up fills weekday daily notes backwards from the run date, skipping weekends
+- announcements whose shifted note date is still in the future are left pending for a later run
 - archived weekly notes are keyed by the week they describe, so catch-up days link back to the correct week file
 
 ## Ranking and Selection

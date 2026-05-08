@@ -288,6 +288,80 @@ def test_pipeline_auto_assigns_note_dates_ending_at_invocation_date(tmp_path: Pa
     assert any("announcement-2026-03-24" in path.name for path in run_files)
 
 
+def test_pipeline_shifted_announcements_fill_next_weekday_notes_and_defer_future_notes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = make_app_config(tmp_path, shift_announcements_to_next_weekday=True)
+    announcement_dates = [
+        date(2026, 5, 1),
+        date(2026, 5, 4),
+        date(2026, 5, 5),
+        date(2026, 5, 6),
+        date(2026, 5, 7),
+        date(2026, 5, 8),
+    ]
+    note_dates = [
+        date(2026, 5, 4),
+        date(2026, 5, 5),
+        date(2026, 5, 6),
+        date(2026, 5, 7),
+        date(2026, 5, 8),
+    ]
+    papers_by_day = {
+        announcement_day: [
+            make_paper(
+                arxiv_id=f"2605.30{index:03d}",
+                title=f"Announcement {announcement_day.isoformat()}",
+            )
+        ]
+        for index, announcement_day in enumerate(announcement_dates, start=1)
+    }
+
+    class SequencedFetcher(FakeFetcher):
+        def __init__(self):
+            super().__init__([], available_dates=announcement_dates)
+
+        def collect_candidates(self, *_args, **kwargs):
+            FakeFetcher.last_call = kwargs
+            return list(papers_by_day[kwargs["announcement_date"]])
+
+    monkeypatch.setattr("re_ass.pipeline.ArxivFetcher", lambda **_kwargs: SequencedFetcher())
+    monkeypatch.setattr("re_ass.pipeline.PaperRanker", lambda **kwargs: FakeRanker(**kwargs))
+    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: _preferences())
+    monkeypatch.setattr("re_ass.pipeline.GenerationService", lambda **_kwargs: FakeGenerationService())
+
+    exit_code = run(config, date(2026, 5, 8))
+
+    assert exit_code == 0
+    for announcement_day, note_day in zip(announcement_dates[:5], note_dates):
+        daily_text = (config.daily_notes_dir / f"{note_day.isoformat()}.md").read_text(encoding="utf-8")
+        assert f"Announcement {announcement_day.isoformat()}" in daily_text
+    assert not (config.daily_notes_dir / "2026-05-11.md").exists()
+    assert '"last_completed_announcement_date": "2026-05-07"' in (
+        config.state_root / "announcement-checkpoint.json"
+    ).read_text(encoding="utf-8")
+
+
+def test_pipeline_defers_all_announcements_when_every_note_date_is_in_the_future(tmp_path: Path, monkeypatch) -> None:
+    # Friday announcement maps to Monday; running on Friday should return 0
+    # with no notes written and the checkpoint left untouched.
+    config = make_app_config(tmp_path, shift_announcements_to_next_weekday=True)
+    monkeypatch.setattr(
+        "re_ass.pipeline.ArxivFetcher",
+        lambda **_kwargs: FakeFetcher([make_paper()], available_dates=[date(2026, 5, 8)]),
+    )
+    monkeypatch.setattr("re_ass.pipeline.PaperRanker", lambda **kwargs: FakeRanker(**kwargs))
+    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: _preferences())
+    monkeypatch.setattr("re_ass.pipeline.GenerationService", lambda **_kwargs: FakeGenerationService())
+
+    exit_code = run(config, date(2026, 5, 8))
+
+    assert exit_code == 0
+    assert not any(config.daily_notes_dir.glob("*.md"))
+    assert not (config.state_root / "announcement-checkpoint.json").exists()
+
+
 def test_pipeline_skips_weekend_note_dates_when_backfilling_automatic_runs(tmp_path: Path, monkeypatch) -> None:
     config = make_app_config(tmp_path)
     papers = [
@@ -319,6 +393,21 @@ def test_pipeline_skips_weekend_note_dates_when_backfilling_automatic_runs(tmp_p
     assert "Monday Reading Paper" in (config.daily_notes_dir / "2026-03-30.md").read_text(encoding="utf-8")
     assert not (config.daily_notes_dir / "2026-03-28.md").exists()
     assert not (config.daily_notes_dir / "2026-03-29.md").exists()
+
+
+def test_pipeline_explicit_date_backfill_stays_on_requested_date_when_shift_enabled(tmp_path: Path, monkeypatch) -> None:
+    config = make_app_config(tmp_path, shift_announcements_to_next_weekday=True)
+    paper = make_paper(arxiv_id="2605.30101", title="Surgical Backfill Paper")
+    monkeypatch.setattr("re_ass.pipeline.ArxivFetcher", lambda **_kwargs: FakeFetcher([paper], available_dates=[date(2026, 5, 4)]))
+    monkeypatch.setattr("re_ass.pipeline.PaperRanker", lambda **kwargs: FakeRanker(**kwargs))
+    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: _preferences())
+    monkeypatch.setattr("re_ass.pipeline.GenerationService", lambda **_kwargs: FakeGenerationService())
+
+    exit_code = run(config, date(2026, 5, 4), backfill=True)
+
+    assert exit_code == 0
+    assert "Surgical Backfill Paper" in (config.daily_notes_dir / "2026-05-04.md").read_text(encoding="utf-8")
+    assert not (config.daily_notes_dir / "2026-05-05.md").exists()
 
 
 def test_pipeline_backfill_leaves_current_weekly_summary_unchanged(tmp_path: Path, monkeypatch) -> None:
