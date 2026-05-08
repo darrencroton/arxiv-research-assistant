@@ -29,6 +29,7 @@ def test_load_config_parses_explicit_llm_provider_settings(tmp_path: Path) -> No
         "model = 'gpt-5.2'\n"
         "timeout_seconds = 1200\n"
         "max_output_tokens = 4096\n"
+        "max_prompt_chars = 500000\n"
         "temperature = 0.1\n"
         "retry_attempts = 4\n"
         "prompt_debug_file = 'archive/prompts/last.txt'\n"
@@ -46,6 +47,8 @@ def test_load_config_parses_explicit_llm_provider_settings(tmp_path: Path) -> No
     assert config.arxiv_page_size == 75
     assert config.always_summarize_score == 91.5
     assert config.min_selection_score == 82.5
+    assert config.llm.max_prompt_chars == 500000
+    assert config.llm.provider_config()["max_prompt_chars"] == 500000
     assert config.llm.prompt_debug_file == (tmp_path / "archive" / "prompts" / "last.txt").resolve()
 
 
@@ -64,6 +67,27 @@ def test_load_config_parses_llm_effort_for_cli_provider(tmp_path: Path) -> None:
 
     assert config.llm.effort == "high"
     assert config.llm.provider_config()["effort"] == "high"
+
+
+def test_load_config_passes_openai_compatible_endpoint_settings(tmp_path: Path) -> None:
+    config_path = tmp_path / "settings.toml"
+    config_path.write_text(
+        f"{DEFAULT_HEADINGS}\n"
+        "[llm]\n"
+        "mode = 'api'\n"
+        "provider = 'openai-compatible'\n"
+        "model = 'local-model'\n"
+        "base_url = 'http://127.0.0.1:1234/v1'\n"
+        "api_key_env = 'LOCAL_LLM_API_KEY'\n",
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.llm.base_url == "http://127.0.0.1:1234/v1"
+    assert config.llm.api_key_env == "LOCAL_LLM_API_KEY"
+    assert config.llm.provider_config()["base_url"] == "http://127.0.0.1:1234/v1"
+    assert config.llm.provider_config()["api_key_env"] == "LOCAL_LLM_API_KEY"
 
 
 def test_load_config_uses_new_runtime_sections(tmp_path: Path) -> None:
@@ -110,6 +134,34 @@ def test_load_config_treats_blank_llm_effort_as_unset(tmp_path: Path) -> None:
 
     assert config.llm.effort is None
     assert "effort" not in config.llm.provider_config()
+
+
+def test_load_config_treats_blank_max_prompt_chars_as_unset(tmp_path: Path) -> None:
+    config_path = tmp_path / "settings.toml"
+    config_path.write_text(
+        f"{DEFAULT_HEADINGS}\n"
+        "[llm]\n"
+        "max_prompt_chars = ''\n",
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.llm.max_prompt_chars is None
+    assert "max_prompt_chars" not in config.llm.provider_config()
+
+
+def test_load_config_rejects_non_positive_max_prompt_chars(tmp_path: Path) -> None:
+    config_path = tmp_path / "settings.toml"
+    config_path.write_text(
+        f"{DEFAULT_HEADINGS}\n"
+        "[llm]\n"
+        "max_prompt_chars = 0\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=r"max_prompt_chars"):
+        load_config(config_path)
 
 
 def test_load_config_supports_legacy_arxiv_max_results_key(tmp_path: Path) -> None:

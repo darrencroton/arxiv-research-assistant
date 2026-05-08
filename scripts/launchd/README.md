@@ -34,7 +34,7 @@ Make sure these steps work first:
    uv run re-ass
    ```
 
-Automation should only be installed after a manual run succeeds. This is especially important for CLI-backed providers such as Claude, Codex, Copilot, Gemini, or OpenCode, because they must already be authenticated or configured for non-interactive use.
+Automation should only be installed after a manual run succeeds. This is especially important for CLI-backed providers such as Claude, Codex, Copilot, or Gemini, because they must already be authenticated or configured for non-interactive use.
 
 ## Render the plist
 
@@ -52,7 +52,7 @@ tmp/launchd/com.user.re-ass.plist
 
 The rendered plist contains absolute paths for `uv`, the repo root, and the log directory. If you move this repo, reinstall `uv` somewhere else, or want to pick up a different `uv` binary, rerun `./scripts/launchd/render-plist.sh` and reinstall the LaunchAgent.
 
-The rendered plist also carries a concrete `PATH` built from the shell that ran `render-plist.sh`, plus standard macOS command directories. This is important for Homebrew-installed provider CLIs such as `copilot`, `codex`, `claude`, `gemini`, or `opencode`, because `launchd` does not inherit your interactive shell PATH by default.
+The rendered plist also carries a concrete `PATH` built from the shell that ran `render-plist.sh`, plus standard macOS command directories. This is important for Homebrew-installed provider CLIs such as `copilot`, `codex`, `claude`, or `gemini`, because `launchd` does not inherit your interactive shell PATH by default.
 
 ## Optional: customise the schedule
 

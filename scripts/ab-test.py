@@ -4,8 +4,8 @@
 PURPOSE
 -------
 Run an identical re-ass pipeline against any candidate LLM provider (a local
-model via OpenCode, codex, gemini, perplexity, ...) alongside your production
-benchmark (currently Copilot CLI + Sonnet 4.6, high effort), with isolated
+OpenAI-compatible endpoint, codex, gemini, perplexity, ...) alongside your production
+benchmark, with isolated
 output / state / log directories so the two sides never collide. Then produce a
 side-by-side report of rankings, selections, paper notes, and weekly
 synthesis.
@@ -14,8 +14,8 @@ PREREQUISITES
 -------------
 1. Your benchmark `user_preferences/settings.toml` is configured and a manual
    `uv run re-ass` succeeds.
-2. The candidate provider is configured for non-interactive use (e.g. OpenCode
-   authenticated, codex CLI logged in, gemini API key set, ...).
+2. The candidate provider is configured for non-interactive use (e.g. local
+   inference server running, codex CLI logged in, gemini API key set, ...).
 3. Python 3.13+ (matches the project's `requires-python`).
 
 LIFECYCLE
@@ -55,19 +55,30 @@ STEP-BY-STEP
         -> "tmp/..." becomes "tmp-<name>/..."
 
     The [llm] mode/provider/model/effort fields are left identical to the
-    benchmark so a diff between settings.toml and settings-<name>.toml
-    shows exactly the variable under test (only prompt_debug_file inside
-    [llm] is suffixed, since it's a path).
+    benchmark so a diff between settings.toml and settings-<name>.toml shows
+    exactly the variable under test (only prompt_debug_file inside [llm] is
+    suffixed, since it's a path).
 
     AFTER setup, edit user_preferences/settings-<name>.toml [llm] to point at
-    your candidate provider/model. For example, for a local Llama via
-    OpenCode:
+    your candidate provider/model and any runtime limits that differ from the
+    benchmark.
+
+    Common local-model variant using LM Studio, llama.cpp, vLLM, LocalAI, or
+    another OpenAI-compatible server:
 
         [llm]
-        mode = "cli"
-        provider = "opencode"
-        model = "llama3.1:8b"
-        effort = "high"
+        mode = "api"
+        provider = "openai-compatible"
+        model = "your-loaded-model-name"
+        effort = ""
+        base_url = "http://127.0.0.1:1234/v1"
+        api_key_env = ""
+        timeout_seconds = 3600
+        max_prompt_chars = 1000000
+
+    `effort = ""` prevents CLI reasoning-effort settings from leaking into an
+    API-backed local model. Increase timeout_seconds and max_prompt_chars when
+    testing slow, large-context local models.
 
     `--force` overwrites an existing variant settings file.
 
@@ -145,7 +156,7 @@ STEP-BY-STEP
 
 COMMON VARIANTS
 ---------------
-  --name local    OpenCode + a local Llama/Qwen/etc. model
+  --name local    API provider backed by a local OpenAI-compatible endpoint
   --name codex    Codex CLI (must be logged in)
   --name gemini   Gemini API (GOOGLE_API_KEY or GOOGLE_APPLICATION_CREDENTIALS)
   --name claude   Claude API or Claude CLI
@@ -157,6 +168,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import plistlib
 import re
 import shutil
 import subprocess
@@ -371,7 +383,7 @@ def cmd_schedule(args: argparse.Namespace) -> int:
         logs_display = variant_paths.logs_root
     print(f"\nInstalled LaunchAgent: {installed}")
     print(f"Service:               {domain}/{label}")
-    print(f"Schedule:              hour={args.hour}, minute={args.minute}")
+    print(f"Schedule:              {_format_schedule_for_display(variant_plist_text)}")
     print(f"Logs land in:          {logs_display}/launchd.{{stdout,stderr}}.log")
     print("\nKick off a real run now (uses today's arXiv listing):")
     print(f"  launchctl kickstart -k {domain}/{label}")
@@ -382,51 +394,104 @@ def cmd_schedule(args: argparse.Namespace) -> int:
 
 def _patch_plist_for_variant(
     *, plist_text: str, name: str, config_path: str,
-    log_dir: Path, hour: int, minute: int,
+    log_dir: Path, hour: int | None, minute: int | None,
 ) -> str:
     label = f"com.user.re-ass.{name}"
-    text = re.sub(
-        r"(<key>Label</key>\s*<string>)[^<]+(</string>)",
-        rf"\g<1>{label}\g<2>",
-        plist_text,
-        count=1,
+    data = plistlib.loads(plist_text.encode("utf-8"))
+    data["Label"] = label
+    data["ProgramArguments"] = _variant_program_arguments(
+        data.get("ProgramArguments", []),
+        config_path,
     )
-
-    text = re.sub(
-        r"(<string>re-ass</string>)",
-        rf"\g<1>\n        <string>--config</string>\n        <string>{config_path}</string>",
-        text,
-        count=1,
+    data["StartCalendarInterval"] = _variant_start_calendar_interval(
+        data.get("StartCalendarInterval"),
+        hour,
+        minute,
     )
-
-    text = re.sub(
-        r"<key>StartCalendarInterval</key>\s*<dict>.*?</dict>",
-        (
-            "<key>StartCalendarInterval</key>\n"
-            "    <dict>\n"
-            f"        <key>Hour</key>\n        <integer>{hour}</integer>\n"
-            f"        <key>Minute</key>\n        <integer>{minute}</integer>\n"
-            "    </dict>"
-        ),
-        text,
-        count=1,
-        flags=re.DOTALL,
-    )
-
     log_dir_str = log_dir.as_posix()
-    text = re.sub(
-        r"(<key>StandardOutPath</key>\s*<string>)[^<]+(</string>)",
-        rf"\g<1>{log_dir_str}/launchd.stdout.log\g<2>",
-        text,
-        count=1,
-    )
-    text = re.sub(
-        r"(<key>StandardErrorPath</key>\s*<string>)[^<]+(</string>)",
-        rf"\g<1>{log_dir_str}/launchd.stderr.log\g<2>",
-        text,
-        count=1,
-    )
-    return text
+    data["StandardOutPath"] = f"{log_dir_str}/launchd.stdout.log"
+    data["StandardErrorPath"] = f"{log_dir_str}/launchd.stderr.log"
+    return plistlib.dumps(data, sort_keys=False).decode("utf-8")
+
+
+def _variant_program_arguments(program_args: Any, config_path: str) -> list[str]:
+    args = [str(arg) for arg in program_args] if isinstance(program_args, list) else []
+    if not args:
+        return ["uv", "run", "re-ass", "--config", config_path]
+
+    if "--config" in args:
+        config_index = args.index("--config")
+        if config_index + 1 < len(args):
+            args[config_index + 1] = config_path
+        else:
+            args.append(config_path)
+        return args
+
+    try:
+        re_ass_index = args.index("re-ass")
+    except ValueError:
+        args.extend(["--config", config_path])
+        return args
+    return args[: re_ass_index + 1] + ["--config", config_path] + args[re_ass_index + 1:]
+
+
+def _variant_start_calendar_interval(schedule: Any, hour: int | None, minute: int | None) -> Any:
+    if isinstance(schedule, list):
+        patched = []
+        for entry in schedule:
+            if isinstance(entry, dict):
+                updated = dict(entry)
+                updated["Hour"], updated["Minute"] = _resolve_schedule_time(entry, hour, minute)
+                patched.append(updated)
+            else:
+                patched.append(entry)
+        return patched
+
+    if isinstance(schedule, dict):
+        updated = dict(schedule)
+        updated["Hour"], updated["Minute"] = _resolve_schedule_time(schedule, hour, minute)
+        return updated
+
+    resolved_hour, resolved_minute = _resolve_schedule_time({}, hour, minute)
+    return {"Hour": resolved_hour, "Minute": resolved_minute}
+
+
+def _resolve_schedule_time(entry: dict[str, Any], hour: int | None, minute: int | None) -> tuple[int, int]:
+    base_hour = _coerce_int(entry.get("Hour"), 7)
+    base_minute = _coerce_int(entry.get("Minute"), 0)
+
+    resolved_hour = base_hour if hour is None else hour
+    if minute is None:
+        total_minutes = resolved_hour * 60 + base_minute + 30
+        return (total_minutes // 60) % 24, total_minutes % 60
+    return resolved_hour % 24, minute % 60
+
+
+def _coerce_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _format_schedule_for_display(plist_text: str) -> str:
+    data = plistlib.loads(plist_text.encode("utf-8"))
+    schedule = data.get("StartCalendarInterval")
+    if isinstance(schedule, list):
+        entries = [entry for entry in schedule if isinstance(entry, dict)]
+        if not entries:
+            return "none"
+        hours_minutes = {(entry.get("Hour"), entry.get("Minute")) for entry in entries}
+        weekdays = [entry.get("Weekday") for entry in entries if entry.get("Weekday") is not None]
+        if len(hours_minutes) == 1:
+            hour, minute = next(iter(hours_minutes))
+            if weekdays:
+                return f"hour={hour}, minute={minute}, weekdays={','.join(str(w) for w in weekdays)}"
+            return f"hour={hour}, minute={minute}"
+        return f"{len(entries)} calendar entries"
+    if isinstance(schedule, dict):
+        return f"hour={schedule.get('Hour')}, minute={schedule.get('Minute')}"
+    return "none"
 
 
 def _print_manual_schedule_fallback(name: str) -> None:
@@ -933,9 +998,10 @@ def main(argv: list[str] | None = None) -> int:
 
     p_sched = sub.add_parser("schedule", help="install com.user.re-ass.<name> launchd job")
     p_sched.add_argument("--name", required=True)
-    p_sched.add_argument("--hour", type=int, default=7, help="StartCalendarInterval Hour (default: 7)")
-    p_sched.add_argument("--minute", type=int, default=30,
-                         help="StartCalendarInterval Minute (default: 30, i.e. 30 min after benchmark's 7:00)")
+    p_sched.add_argument("--hour", type=int, default=None,
+                         help="StartCalendarInterval Hour (default: benchmark hour)")
+    p_sched.add_argument("--minute", type=int, default=None,
+                         help="StartCalendarInterval Minute (default: benchmark minute + 30)")
     p_sched.set_defaults(func=cmd_schedule)
 
     p_cmp = sub.add_parser("compare", help="report on most recent shared run (default) or a specific date/range")

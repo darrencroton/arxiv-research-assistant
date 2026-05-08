@@ -227,6 +227,103 @@ class PerplexityAPI(Provider):
         return self.default_context_size
 
 
+class OpenAICompatibleAPI(Provider):
+    """Generic OpenAI-compatible chat completions provider.
+
+    This is intended for local or self-hosted inference servers such as LM
+    Studio, llama.cpp, vLLM, LocalAI, or any service exposing
+    `/v1/chat/completions`.
+    """
+
+    default_context_size = 128_000
+
+    def supports_direct_pdf(self):
+        return False
+
+    def setup(self):
+        """Initialise an OpenAI client pointed at a configured compatible endpoint."""
+        import openai
+
+        self.base_url = str(self.config.get("base_url") or "").strip().rstrip("/")
+        if not self.base_url:
+            raise ValueError(
+                "OpenAI-compatible API provider requires [llm].base_url, "
+                'for example "http://127.0.0.1:1234/v1" for LM Studio.'
+            )
+        if not self.model:
+            raise ValueError("OpenAI-compatible API provider requires [llm].model.")
+
+        self.api_key_env = str(self.config.get("api_key_env") or "").strip()
+        self.api_key = os.getenv(self.api_key_env) if self.api_key_env else ""
+        self.client = openai.OpenAI(
+            api_key=self.api_key or "not-needed",
+            base_url=self.base_url,
+            timeout=float(self.config.get("timeout", 300)),
+        )
+
+    def validate_runtime_ready(self):
+        """Check that the configured endpoint is reachable before a full run starts."""
+        timeout = min(float(self.config.get("timeout", 300)), 15.0)
+        headers = {}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        try:
+            response = requests.get(f"{self.base_url}/models", headers=headers, timeout=timeout)
+            response.raise_for_status()
+        except requests.RequestException as error:
+            raise ValueError(
+                f"OpenAI-compatible API endpoint is not reachable at {self.base_url}: {error}"
+            ) from error
+
+        model_ids = _extract_openai_compatible_model_ids(response)
+        if model_ids and self.model not in model_ids:
+            logging.warning(
+                "Configured model %r was not listed by %s /models. Available models: %s",
+                self.model,
+                self.base_url,
+                ", ".join(sorted(model_ids)),
+            )
+
+    def process_document(self, content, is_pdf, system_prompt, user_prompt, max_tokens=12288):
+        """Process document via the OpenAI-compatible chat completions endpoint."""
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=self.config.get("temperature", 0.2),
+            max_tokens=max_tokens,
+        )
+        result = response.choices[0].message.content
+        if not result:
+            raise ValueError("No content received from OpenAI-compatible API")
+        return result
+
+    def get_max_context_size(self):
+        return self.default_context_size
+
+
+def _extract_openai_compatible_model_ids(response) -> set[str]:
+    """Return model IDs from a best-effort OpenAI-compatible /models response."""
+    try:
+        payload = response.json()
+    except ValueError:
+        return set()
+    if not isinstance(payload, dict):
+        return set()
+    data = payload.get("data")
+    if not isinstance(data, list):
+        return set()
+
+    model_ids: set[str] = set()
+    for item in data:
+        if isinstance(item, dict) and item.get("id"):
+            model_ids.add(str(item["id"]))
+    return model_ids
+
+
 class OllamaAPI(Provider):
     """Ollama local API provider."""
 

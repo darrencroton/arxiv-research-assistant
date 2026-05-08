@@ -13,8 +13,8 @@ def test_create_provider_builds_cli_provider(monkeypatch: pytest.MonkeyPatch) ->
     assert provider.model == "gpt-5.4"
 
 
-def test_supported_cli_providers_include_opencode() -> None:
-    assert "opencode" in get_supported_provider_names("cli")
+def test_supported_api_providers_include_openai_compatible() -> None:
+    assert "openai-compatible" in get_supported_provider_names("api")
 
 
 def test_create_provider_rejects_missing_api_key(monkeypatch: pytest.MonkeyPatch) -> None:

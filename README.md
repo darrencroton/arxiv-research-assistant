@@ -16,8 +16,8 @@ The default project knowledge is tuned for `astro-ph`, but can easily be adapted
 
 Supported providers:
 
-- CLI mode: `claude`, `codex`, `copilot`, `gemini`, `opencode`
-- API mode: `claude`, `openai`, `gemini`, `perplexity`, `ollama`
+- CLI mode: `claude`, `codex`, `copilot`, `gemini`
+- API mode: `claude`, `openai`, `gemini`, `perplexity`, `ollama`, `openai-compatible`
 
 ### 1. Run setup
 
@@ -46,26 +46,28 @@ Common provider setups:
 - CLI `codex`: `mode = "cli"`, `provider = "codex"`, then run `codex login`, or `printenv OPENAI_API_KEY | codex login --with-api-key`
 - CLI `copilot`: `mode = "cli"`, `provider = "copilot"`, then run `copilot login`, or set `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, or `GITHUB_TOKEN`
 - CLI `gemini`: `mode = "cli"`, `provider = "gemini"`, then set `GEMINI_API_KEY`, or use Vertex AI credentials
-- CLI `opencode`: `mode = "cli"`, `provider = "opencode"`, then choose a provider-qualified model from `opencode models`; for cloud providers run `opencode auth login` or set the relevant API key, and for local providers configure them in `opencode.json`
 - API `claude`: `mode = "api"`, `provider = "claude"`, then set `ANTHROPIC_API_KEY`
 - API `openai`: `mode = "api"`, `provider = "openai"`, then set `OPENAI_API_KEY`
 - API `gemini`: `mode = "api"`, `provider = "gemini"`, then set `GOOGLE_API_KEY`
 - API `perplexity`: `mode = "api"`, `provider = "perplexity"`, then set `PERPLEXITY_API_KEY`
 - API `ollama`: `mode = "api"`, `provider = "ollama"`, and use `ollama_base_url` if you need a non-default local endpoint
+- API `openai-compatible`: `mode = "api"`, `provider = "openai-compatible"`, set `base_url` to a `/v1` endpoint and set `model` to the server's model name
 
-OpenCode supports local LLMs as well as cloud providers. Use provider-qualified model names from `opencode models` so that OpenCode routes to the right backend:
+Use `openai-compatible` for local or self-hosted servers that expose the OpenAI Chat Completions API, including LM Studio, llama.cpp `llama-server`, vLLM, and LocalAI. This path sends one plain chat-completions request with the configured system and user prompts; it does not wrap the prompt in an agent or expose tools.
 
 ```toml
 [llm]
-mode = "cli"
-provider = "opencode"
-model = "opencode/gpt-5-nano"  # OpenCode-hosted model
-# model = "ollama/qwen2.5:14b" # local model via configured Ollama provider
-# model = "lmstudio/google/gemma-3n-e4b" # local model via configured LM Studio provider
-# model = "anthropic/claude-sonnet-4-5"  # cloud provider
+mode = "api"
+provider = "openai-compatible"
+model = "your-loaded-model-name"
+effort = ""
+base_url = "http://127.0.0.1:1234/v1"
+api_key_env = ""
+timeout_seconds = 3600
+max_prompt_chars = 1000000
 ```
 
-Install OpenCode from [opencode.ai](https://opencode.ai). For local models, configure the local provider in `opencode.json` and verify it appears in `opencode models`. For cloud providers, either run `opencode auth login` or set the relevant provider API key (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`, etc.). `re-ass` runs OpenCode in non-interactive JSON mode with OpenCode tools/plugins denied so paper content cannot trigger shell, edit, read, web, or plugin actions.
+For authenticated OpenAI-compatible endpoints, set `api_key_env` to the environment variable that holds the key, for example `api_key_env = "LOCAL_LLM_API_KEY"`. For local servers with no authentication, leave it blank.
 
 Example:
 

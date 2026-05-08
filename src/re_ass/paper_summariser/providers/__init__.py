@@ -3,6 +3,7 @@
 Provider selection is explicit:
     create_provider("cli", "claude")
     create_provider("api", "openai")
+    create_provider("api", "openai-compatible")
 
 The program never switches mode or provider automatically. The requested mode
 and provider must both be valid, and any missing prerequisite must fail
@@ -15,8 +16,8 @@ import shutil
 
 from dotenv import load_dotenv
 
-from .api import ClaudeAPI, OpenAIAPI, GeminiAPI, PerplexityAPI, OllamaAPI
-from .cli import ClaudeCLI, CodexCLI, GeminiCLI, CopilotCLI, OpencodeCLI
+from .api import ClaudeAPI, OpenAIAPI, GeminiAPI, PerplexityAPI, OllamaAPI, OpenAICompatibleAPI
+from .cli import ClaudeCLI, CodexCLI, GeminiCLI, CopilotCLI
 
 load_dotenv()
 
@@ -25,7 +26,6 @@ _CLI_PROVIDERS = {
     "gemini": GeminiCLI,
     "codex": CodexCLI,
     "copilot": CopilotCLI,
-    "opencode": OpencodeCLI,
 }
 
 _API_PROVIDERS = {
@@ -34,6 +34,7 @@ _API_PROVIDERS = {
     "openai": OpenAIAPI,
     "perplexity": PerplexityAPI,
     "ollama": OllamaAPI,
+    "openai-compatible": OpenAICompatibleAPI,
 }
 
 _API_KEY_ENV_VARS = {

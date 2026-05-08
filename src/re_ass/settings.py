@@ -32,8 +32,11 @@ class LlmConfig:
     effort: str | None
     timeout_seconds: int
     max_output_tokens: int
+    max_prompt_chars: int | None
     temperature: float
     retry_attempts: int
+    base_url: str | None
+    api_key_env: str | None
     prompt_debug_file: Path
     download_timeout_seconds: int
     max_pdf_size_mb: int
@@ -47,8 +50,15 @@ class LlmConfig:
         }
         if self.model:
             config["model"] = self.model
+        if self.max_prompt_chars:
+            config["max_prompt_chars"] = self.max_prompt_chars
         if self.mode == "cli" and self.effort:
             config["effort"] = self.effort
+        if self.provider == "openai-compatible":
+            if self.base_url:
+                config["base_url"] = self.base_url
+            if self.api_key_env:
+                config["api_key_env"] = self.api_key_env
         if self.provider == "ollama":
             config["base_url"] = self.ollama_base_url
         return config
@@ -144,6 +154,25 @@ def _positive_int(data: dict[str, object], key: str, section_name: str, *, defau
     if value <= 0:
         raise ValueError(f"Setting [{section_name}].{key} must be a positive integer.")
     return value
+
+
+def _optional_positive_int(raw_value: object, setting_name: str) -> int | None:
+    if raw_value in (None, ""):
+        return None
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"Setting {setting_name} must be a positive integer when set.") from error
+    if value <= 0:
+        raise ValueError(f"Setting {setting_name} must be a positive integer when set.")
+    return value
+
+
+def _optional_stripped_string(raw_value: object) -> str | None:
+    if raw_value in (None, ""):
+        return None
+    value = str(raw_value).strip()
+    return value or None
 
 
 def load_config(config_path: Path | None = None, project_root: Path | None = None) -> AppConfig:
@@ -264,8 +293,11 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
         effort=effort,
         timeout_seconds=int(llm_data.get("timeout_seconds", 900)),
         max_output_tokens=int(llm_data.get("max_output_tokens", 12288)),
+        max_prompt_chars=_optional_positive_int(llm_data.get("max_prompt_chars"), "[llm].max_prompt_chars"),
         temperature=float(llm_data.get("temperature", 0.2)),
         retry_attempts=int(llm_data.get("retry_attempts", 3)),
+        base_url=_optional_stripped_string(llm_data.get("base_url")),
+        api_key_env=_optional_stripped_string(llm_data.get("api_key_env")),
         prompt_debug_file=_resolve_path(
             root,
             str(llm_data.get("prompt_debug_file", "tmp/paper_summariser/prompt.txt")),

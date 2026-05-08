@@ -1,6 +1,6 @@
 """CLI-based LLM providers for the Science Paper Summariser.
 
-Providers invoke AI CLI tools (claude, codex, gemini, copilot, opencode) via subprocess
+Providers invoke AI CLI tools (claude, codex, gemini, copilot) via subprocess
 in non-interactive mode. All CLI providers share a common base pattern: combine
 system and user prompts into a single text prompt and capture stdout.
 
@@ -8,7 +8,6 @@ CLI providers never support direct PDF input — text extraction via marker-pdf
 is always performed before the prompt is constructed.
 """
 
-import json
 import logging
 import os
 import shutil
@@ -327,111 +326,6 @@ class GeminiCLI(CLIProvider):
             return (
                 "For `re-ass`, configure Gemini CLI with `GEMINI_API_KEY` or Vertex AI credentials "
                 "instead of interactive Google OAuth."
-            )
-        return None
-
-
-class OpencodeCLI(CLIProvider):
-    """OpenCode CLI provider (opencode run <prompt>).
-
-    Supports any model exposed by `opencode models`, including local providers
-    configured in opencode.json and cloud providers authenticated via env vars
-    or `opencode auth login`.
-    Reasoning effort is passed via --variant (provider-specific, e.g. 'high', 'max').
-    """
-
-    cli_command = "opencode"
-    prompt_flag = ""  # Prompt is positional after the run subcommand
-    extra_flags = ["run", "--pure", "--format", "json"]
-    model_flag = "--model"
-    effort_flag = "--variant"  # OpenCode maps reasoning effort to --variant
-    default_context_size = 32_768
-    default_timeout = 600
-    env_overrides = {
-        "OPENCODE_PERMISSION": json.dumps("deny"),
-        "OPENCODE_DISABLE_DEFAULT_PLUGINS": "true",
-    }
-
-    def process_document(self, content, is_pdf, system_prompt, user_prompt, max_tokens=12288):
-        """Process document via opencode and extract assistant text from JSON events."""
-        combined_prompt = f"{system_prompt}\n\n{user_prompt}"
-        cmd = self._build_command(combined_prompt)
-
-        logging.info(
-            f"Invoking {self.cli_command} CLI "
-            f"(prompt: {len(combined_prompt)} chars, timeout: {int(self.config.get('timeout', self.default_timeout))}s)"
-        )
-
-        result = self._run_command(cmd)
-
-        if result.returncode != 0:
-            raise RuntimeError(self._format_command_failure(result))
-
-        parts = []
-        for line in result.stdout.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if event.get("type") == "text":
-                text = (event.get("part") or {}).get("text", "")
-                if text:
-                    parts.append(text)
-
-        output = "".join(parts)
-        if not output.strip():
-            raise ValueError(f"{self.cli_command} returned empty output")
-
-        logging.info(f"{self.cli_command} CLI returned {len(output)} chars")
-        return output
-
-    def validate_runtime_ready(self):
-        if not self.model:
-            result = self._run_readiness_check([self.cli_command, "models"])
-            if result.returncode == 0 and result.stdout.strip():
-                return
-            raise ValueError(
-                "OpenCode CLI is installed but no models are available. "
-                "Run `opencode auth login` or configure a local provider in opencode.json, "
-                "then verify with `opencode models` before running `re-ass`."
-            )
-
-        if "/" not in self.model:
-            raise ValueError(
-                "OpenCode CLI model names must use provider/model syntax, "
-                f"got '{self.model}'. Run `opencode models` to choose a valid model."
-            )
-
-        provider_name = self.model.split("/", 1)[0]
-        result = self._run_readiness_check([self.cli_command, "models", provider_name])
-        if result.returncode != 0:
-            error_snippet = self._get_error_output(result)
-            raise ValueError(
-                f"OpenCode CLI provider '{provider_name}' is not available: {error_snippet}. "
-                "Run `opencode auth login`, set the provider's API key environment variable, "
-                "or configure the provider in opencode.json. Verify with `opencode models` before running `re-ass`."
-            )
-
-        available_models = {line.strip() for line in result.stdout.splitlines() if line.strip()}
-        if self.model in available_models:
-            return
-
-        raise ValueError(
-            f"OpenCode CLI model '{self.model}' is not available. "
-            f"Run `opencode models {provider_name}` to choose a valid model, "
-            "or update your opencode provider configuration."
-        )
-
-    def _error_hint(self, error_output):
-        lowered = error_output.lower()
-        if any(kw in lowered for kw in ("not authenticated", "api key", "auth", "unauthorized")):
-            return (
-                "Run `opencode auth login`, or set the relevant API key "
-                "(ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.) before running `re-ass`. "
-                "For local models, set llm.model to 'ollama/model_name' or 'lmstudio/model_name'."
             )
         return None
 
