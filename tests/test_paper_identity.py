@@ -64,9 +64,10 @@ def test_derive_identity_falls_back_to_unknown_for_degenerate_comma_name() -> No
     paper = make_paper(
         arxiv_id="2603.20012",
         title="Some Paper",
-        authors=(", R. A.",),
+        authors=(", R. A.", "Oesch, P. A."),
     )
 
     identity = derive_identity(paper)
 
-    assert identity.authors_short == "Unknown"
+    assert identity.authors_short == "Unknown et al"
+    assert identity.filename_stem.startswith("Unknown et al - ")
