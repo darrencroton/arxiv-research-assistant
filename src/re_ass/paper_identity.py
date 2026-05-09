@@ -60,7 +60,7 @@ def _authors_short(authors: tuple[str, ...]) -> str:
     first_author = authors[0].strip() or "Unknown"
     # Abstract page scraper yields "Last, First" format; API yields "First Last"
     if "," in first_author:
-        surname = first_author.split(",")[0].strip()
+        surname = first_author.split(",")[0].strip() or "Unknown"
     else:
         surname = first_author.split()[-1]
     if len(authors) == 1:

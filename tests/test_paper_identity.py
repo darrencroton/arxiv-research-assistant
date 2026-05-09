@@ -58,3 +58,16 @@ def test_derive_identity_handles_last_comma_first_author_format() -> None:
 
     assert identity.authors_short == "Meyer et al"
     assert identity.filename_stem.startswith("Meyer et al - ")
+
+
+def test_derive_identity_falls_back_to_unknown_for_degenerate_comma_name() -> None:
+    paper = make_paper(
+        arxiv_id="2603.20012",
+        title="Some Paper",
+        authors=(", R. A.", "Oesch, P. A."),
+    )
+
+    identity = derive_identity(paper)
+
+    assert identity.authors_short == "Unknown et al"
+    assert identity.filename_stem.startswith("Unknown et al - ")
