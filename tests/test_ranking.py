@@ -130,6 +130,12 @@ def test_ranker_requires_science_and_method_matches_when_sections_are_present(tm
     selection = ranker.rank_papers(preferences, papers)
 
     assert [paper.title for paper in selection.selected_papers] == ["Dual Match"]
+    # Partial-match paper scores above min_selection_score but fails dual-match, so it
+    # must appear in weekly_interest rather than being silently excluded.
+    assert [item.paper.title for item in selection.weekly_interest] == ["Science Only"]
+    # Selected papers must not appear in weekly_interest.
+    selected_titles = {paper.title for paper in selection.selected_papers}
+    assert not any(item.paper.title in selected_titles for item in selection.weekly_interest)
     prompt = provider.calls[0]["user_prompt"]
     assert "<science_priorities>" in prompt
     assert "<method_priorities>" in prompt
