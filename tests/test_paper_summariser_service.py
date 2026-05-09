@@ -82,7 +82,9 @@ def test_summarise_source_uses_direct_pdf_when_provider_supports_it(tmp_path: Pa
                 "Authors: Doe J., Smith J.\n"
                 "Published: March 2026 ([Link](https://arxiv.org/abs/1234.5678))\n\n"
                 "## Key Ideas\n"
-                "- Important point[^1]\n"
+                "- Important point[^1]\n\n"
+                "## References\n"
+                '[^1]: "Quoted support" (Abstract, p.1)\n'
             ),
         }
     )
@@ -265,7 +267,9 @@ def test_summarise_source_fits_prompt_before_calling_provider(tmp_path: Path) ->
                 "Authors: Doe J.\n"
                 "Published: March 2026 ([Link](https://arxiv.org/abs/1234.5678))\n\n"
                 "## Key Ideas\n"
-                "- Important point[^1]\n"
+                "- Important point[^1]\n\n"
+                "## References\n"
+                '[^1]: "Quoted support" (Abstract, p.1)\n'
             ),
         }
     )

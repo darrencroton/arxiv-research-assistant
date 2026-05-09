@@ -51,6 +51,8 @@ _APPENDIX_SECTION_TITLES = {
     "SUPPLEMENTARY MATERIAL",
     "SUPPLEMENTARY MATERIALS",
 }
+_INLINE_FOOTNOTE_RE = re.compile(r"\[\^\d+\]")
+_REFERENCES_HEADING_RE = re.compile(r"^## References\s*$", re.MULTILINE)
 _marker_models = None
 
 ARXIV_FILENAME_RE = re.compile(
@@ -674,6 +676,8 @@ def call_llm_with_retry(
             )
             if not summary or not summary.strip():
                 raise ValueError("LLM returned empty or whitespace-only response")
+            if _INLINE_FOOTNOTE_RE.search(summary) and not _REFERENCES_HEADING_RE.search(summary):
+                raise ValueError("Summary has inline footnote markers but is missing the ## References section")
             LOGGER.info("LLM call successful (received ~%s chars)", len(summary))
             return summary
         except Exception as error:

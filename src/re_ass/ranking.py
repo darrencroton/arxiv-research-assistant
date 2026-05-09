@@ -431,7 +431,15 @@ class PaperRanker:
         fill_candidates = [item for item in eligible if item.score < self.always_summarize_score]
         remaining_slots = max(0, self.max_papers - len(always_selected))
         selected = always_selected + fill_candidates[:remaining_slots]
-        weekly_interest = fill_candidates[remaining_slots:]
+        selected_keys = {item.paper_key for item in selected}
+        # Use score-only threshold for weekly interest so that partial-match papers
+        # (science-only or method-only) are not silently excluded when dual_match is
+        # required for selection.
+        weekly_interest = [
+            item for item in ranked
+            if item.score >= self.min_selection_score
+            and item.paper_key not in selected_keys
+        ]
         LOGGER.info(
             "Ranked %s candidate(s): selected=%s always_threshold=%s interest_threshold=%s target_cap=%s weekly_interest=%s dual_match_required=%s",
             len(candidates),

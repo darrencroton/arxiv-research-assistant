@@ -16,6 +16,7 @@ with expertise in analysing research papers and identifying their key scientific
 10. Use italics for emphasis and paper names
 11. If you cannot find an exact supporting quote, do not make the statement
 12. ALWAYS include a Glossary section with a table of technical terms
+13. ALWAYS include a ## References section at the end listing every footnote definition as [^N]: "exact quote" (Section X.Y, p.Z)
 </rules>
 
 <knowledgeBase>
