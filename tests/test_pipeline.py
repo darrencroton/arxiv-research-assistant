@@ -112,7 +112,7 @@ class FakeGenerationService:
             f"# {paper.title}\n\nAuthors: Doe J.\nPublished: March 2026 ([Link](https://arxiv.org/abs/example))\n\n## Notes\nGenerated.\n",
         )
 
-    def generate_weekly_synthesis(self, existing_synthesis: str, weekly_additions: str, *, word_limit: int):
+    def generate_weekly_synthesis(self, existing_synthesis: str, weekly_additions: str, *, word_limit: int, max_tokens: int = 4096):
         self.weekly_synthesis_calls.append(
             {
                 "existing_synthesis": existing_synthesis,
@@ -120,7 +120,7 @@ class FakeGenerationService:
                 "word_limit": word_limit,
             }
         )
-        return f"Synthesis under {word_limit} words."
+        return f"Synthesis around {word_limit} words."
 
 
 class FakeRanker:

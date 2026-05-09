@@ -105,6 +105,7 @@ class AppConfig:
     weekly_additions_heading: str
     weekly_synthesis_word_limit_start: int
     weekly_synthesis_word_limit_end: int
+    weekly_synthesis_max_tokens: int
 
     # arxiv
     max_papers: int
@@ -278,6 +279,12 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
             "Setting [notes].weekly_synthesis_word_limit_end must be greater than or equal to "
             "[notes].weekly_synthesis_word_limit_start."
         )
+    weekly_synthesis_max_tokens = _positive_int(
+        notes_data,
+        "weekly_synthesis_max_tokens",
+        "notes",
+        default=4096,
+    )
 
     # Arxiv
     always_summarize_score = float(arxiv_data.get("always_summarize_score", 90.0))
@@ -348,6 +355,7 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
         weekly_additions_heading=weekly_additions_heading,
         weekly_synthesis_word_limit_start=weekly_synthesis_word_limit_start,
         weekly_synthesis_word_limit_end=weekly_synthesis_word_limit_end,
+        weekly_synthesis_max_tokens=weekly_synthesis_max_tokens,
         max_papers=int(arxiv_data.get("max_papers", 3)),
         arxiv_page_size=int(arxiv_data.get("page_size", arxiv_data.get("max_results", 100))),
         always_summarize_score=always_summarize_score,

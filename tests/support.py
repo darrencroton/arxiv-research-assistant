@@ -73,6 +73,7 @@ def make_app_config(tmp_path: Path, **overrides) -> AppConfig:
         weekly_additions_heading="## DAILY ADDITIONS",
         weekly_synthesis_word_limit_start=100,
         weekly_synthesis_word_limit_end=200,
+        weekly_synthesis_max_tokens=4096,
         max_papers=10,
         arxiv_page_size=50,
         always_summarize_score=90.0,

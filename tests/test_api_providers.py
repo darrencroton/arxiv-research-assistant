@@ -32,7 +32,7 @@ class FakeCompletions:
     def create(self, **kwargs):
         self.calls.append(kwargs)
         message = type("Message", (), {"content": "model output"})
-        choice = type("Choice", (), {"message": message})
+        choice = type("Choice", (), {"message": message, "finish_reason": "stop"})
         return type("Response", (), {"choices": [choice]})
 
 

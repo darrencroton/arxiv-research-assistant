@@ -82,7 +82,14 @@ class GenerationService:
         except PaperSummariserError as error:
             raise GenerationError(f"Unable to create paper note for {paper.title}: {error}") from error
 
-    def generate_weekly_synthesis(self, existing_synthesis: str, weekly_additions: str, *, word_limit: int) -> str:
+    def generate_weekly_synthesis(
+        self,
+        existing_synthesis: str,
+        weekly_additions: str,
+        *,
+        word_limit: int,
+        max_tokens: int = 4096,
+    ) -> str:
         """Generate or update the weekly synthesis text from all weekly additions so far."""
         try:
             response = self._run_text_prompt(
@@ -93,16 +100,16 @@ class GenerationService:
                     "Prioritise synthesis over a paper-by-paper recap. Choose the clearest structure for the "
                     "material: one short paragraph, multiple short paragraphs, bullets, or a mix. Use bullets only "
                     "when they genuinely improve readability. Keep the note quickly digestible, return markdown "
-                    "only, and stay within "
+                    "only, and aim for around "
                     f"{word_limit} words."
                 ),
                 (
                     f"Current synthesis:\n{existing_synthesis or '(none)'}\n\n"
                     f"Weekly paper additions so far:\n{weekly_additions or '(none)'}"
                 ),
-                max_tokens=min(self.config.max_output_tokens, 768),
+                max_tokens=min(self.config.max_output_tokens, max_tokens),
             )
-            cleaned = self._truncate_markdown_words(self._clean_weekly_synthesis(response), limit=word_limit)
+            cleaned = self._clean_weekly_synthesis(response)
             if cleaned:
                 return cleaned
         except GenerationError as error:

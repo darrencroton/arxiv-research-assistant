@@ -397,6 +397,7 @@ def _run_announcement_day(
                     existing_synthesis,
                     weekly_additions,
                     word_limit=_weekly_synthesis_word_limit(config, note_date),
+                    max_tokens=config.weekly_synthesis_max_tokens,
                 )
                 note_manager.update_weekly_note(
                     note_date,

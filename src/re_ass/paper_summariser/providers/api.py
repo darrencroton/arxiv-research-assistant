@@ -296,7 +296,14 @@ class OpenAICompatibleAPI(Provider):
             temperature=self.config.get("temperature", 0.2),
             max_tokens=max_tokens,
         )
-        result = response.choices[0].message.content
+        choice = response.choices[0]
+        if choice.finish_reason == "length":
+            logging.warning(
+                "OpenAI-compatible API response hit the token limit (finish_reason=length, max_tokens=%d); "
+                "output may be truncated mid-sentence.",
+                max_tokens,
+            )
+        result = choice.message.content
         if not result:
             raise ValueError("No content received from OpenAI-compatible API")
         return result

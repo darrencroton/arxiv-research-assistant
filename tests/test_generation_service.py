@@ -121,7 +121,7 @@ def test_generate_weekly_synthesis_uses_full_weekly_additions_and_word_limit(tmp
                 "Prioritise synthesis over a paper-by-paper recap. Choose the clearest structure for the "
                 "material: one short paragraph, multiple short paragraphs, bullets, or a mix. Use bullets only "
                 "when they genuinely improve readability. Keep the note quickly digestible, return markdown "
-                "only, and stay within 150 words."
+                "only, and aim for around 150 words."
             ),
             "user_prompt": (
                 "Current synthesis:\nEarlier synthesis.\n\n"
@@ -134,7 +134,7 @@ def test_generate_weekly_synthesis_uses_full_weekly_additions_and_word_limit(tmp
                 "**Title:** [[Paper Two]]\n\n"
                 "**Summary:** Second summary. [arXiv:2603.10002](https://arxiv.org/abs/2603.10002)\n"
             ),
-            "max_tokens": 768,
+            "max_tokens": 4096,
         }
     ]
 
@@ -154,7 +154,7 @@ def test_generate_weekly_synthesis_preserves_digestible_markdown_structure(tmp_p
     assert synthesis == "First line continues here.\n\n- Theme one\n- Theme two\n\nClosing thought."
 
 
-def test_generate_weekly_synthesis_truncates_without_flattening_markdown_structure(tmp_path: Path) -> None:
+def test_generate_weekly_synthesis_returns_full_response_without_hard_truncation(tmp_path: Path) -> None:
     provider = RecordingProvider(response="Overview paragraph.\n\n- First theme with context\n- Second theme follows")
     service = GenerationService(
         config=make_app_config(tmp_path).llm,
@@ -164,7 +164,7 @@ def test_generate_weekly_synthesis_truncates_without_flattening_markdown_structu
 
     synthesis = service.generate_weekly_synthesis("Earlier synthesis.", "**Summary:** First summary.\n", word_limit=6)
 
-    assert synthesis == "Overview paragraph.\n\n- First theme with context..."
+    assert synthesis == "Overview paragraph.\n\n- First theme with context\n- Second theme follows"
 
 
 def test_generate_weekly_synthesis_fallback_rebuilds_from_all_weekly_summaries(tmp_path: Path) -> None:
