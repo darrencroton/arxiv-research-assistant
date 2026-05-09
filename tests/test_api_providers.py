@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 
 from re_ass.paper_summariser.providers.api import OpenAICompatibleAPI
@@ -85,6 +87,25 @@ def test_openai_compatible_processes_chat_completion(monkeypatch: pytest.MonkeyP
             "max_tokens": 4096,
         }
     ]
+
+
+def test_openai_compatible_warns_when_response_is_truncated(monkeypatch: pytest.MonkeyPatch, caplog) -> None:
+    def fake_openai_client(**kwargs):
+        client = FakeOpenAIClient(**kwargs)
+        message = type("Message", (), {"content": "truncated output"})
+        choice = type("Choice", (), {"message": message, "finish_reason": "length"})
+        client.chat.completions.create = lambda **kw: type("Response", (), {"choices": [choice]})()
+        return client
+
+    monkeypatch.setattr("openai.OpenAI", fake_openai_client)
+
+    provider = OpenAICompatibleAPI({"model": "local-model", "base_url": "http://127.0.0.1:1234/v1"})
+
+    with caplog.at_level(logging.WARNING, logger="re_ass.paper_summariser.providers.api"):
+        output = provider.process_document("", False, "system", "user", max_tokens=512)
+
+    assert output == "truncated output"
+    assert any("finish_reason=length" in record.message and "512" in record.message for record in caplog.records)
 
 
 def test_openai_compatible_readiness_checks_models_endpoint(

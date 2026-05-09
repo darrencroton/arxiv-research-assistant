@@ -12,6 +12,8 @@ import requests
 
 from .base import Provider
 
+LOGGER = logging.getLogger(__name__)
+
 
 class ClaudeAPI(Provider):
     """Anthropic Claude API provider."""
@@ -298,7 +300,7 @@ class OpenAICompatibleAPI(Provider):
         )
         choice = response.choices[0]
         if choice.finish_reason == "length":
-            logging.warning(
+            LOGGER.warning(
                 "OpenAI-compatible API response hit the token limit (finish_reason=length, max_tokens=%d); "
                 "output may be truncated mid-sentence.",
                 max_tokens,
