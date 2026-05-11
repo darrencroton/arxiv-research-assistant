@@ -284,11 +284,15 @@ class PaperSummariser:
             self.provider,
             config=self.config,
         )
-        glossary_section = generate_glossary(
-            summary,
-            self.provider,
-            config=self.config,
-        )
+        glossary_section = ""
+        if has_markdown_section(summary, "## Glossary"):
+            LOGGER.info("Summary already includes a Glossary section; skipping generated glossary.")
+        else:
+            glossary_section = generate_glossary(
+                summary,
+                self.provider,
+                config=self.config,
+            )
         if glossary_section:
             summary = insert_section(summary, glossary_section)
         summary = insert_section(summary, tags_section)
@@ -1121,6 +1125,12 @@ def insert_section(summary: str, section_markdown: str, before_heading: str = "#
     before = "\n".join(summary_lines[:insert_index]).rstrip()
     after = "\n".join(summary_lines[insert_index:]).lstrip()
     return f"{before}\n\n{section}\n\n{after}\n"
+
+
+def has_markdown_section(markdown: str, heading: str) -> bool:
+    """Return whether a Markdown document contains an exact section heading."""
+    target = heading.strip().lower()
+    return any(line.strip().lower() == target for line in markdown.splitlines())
 
 
 def strip_preamble(summary_content: str) -> str:

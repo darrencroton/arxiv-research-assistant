@@ -120,6 +120,33 @@ def test_summarise_source_uses_extracted_text(tmp_path: Path) -> None:
     assert provider.calls[2]["max_tokens"] == 12288
 
 
+def test_summarise_source_keeps_existing_glossary_without_generating_another(tmp_path: Path) -> None:
+    summary_with_glossary = insert_section(_main_summary(), _glossary_section())
+    provider = RecordingProvider(
+        {
+            "response": [summary_with_glossary, _tags_section()],
+        }
+    )
+    source_path = tmp_path / "1234.5678.pdf"
+    source_path.write_bytes(b"%PDF-1.4")
+
+    def input_reader(_path: Path, _provider: Provider, _config):
+        return "arXiv: 1234.5678\nExtracted paper text.", None
+
+    summariser = PaperSummariser(
+        provider=provider,
+        config=make_app_config(tmp_path).llm,
+        input_reader=input_reader,
+    )
+
+    result = summariser.summarise_source(make_paper(arxiv_id="1234.5678", title="Agents for Research"), source_path)
+
+    assert result.raw_summary.count("## Glossary") == 1
+    assert result.raw_summary.index("## Glossary") < result.raw_summary.index("## Tags")
+    assert len(provider.calls) == 2
+    assert "Available science-area keywords" in str(provider.calls[1]["user_prompt"])
+
+
 def test_summarise_source_uses_direct_pdf_when_provider_supports_it(tmp_path: Path) -> None:
     provider = RecordingProvider(
         {
