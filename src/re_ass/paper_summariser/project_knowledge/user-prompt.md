@@ -19,11 +19,7 @@ Use this exact structure:
 $SUMMARY_TEMPLATE
 </template>
 
-<tags>
-The Tags section must have two parts:
-1. First line: Hashtags for telescopes, surveys, datasets, models (proper nouns only)
-2. Second line: Science area hashtags (use ONLY provided keywords, only the best ones)
-</tags>
+$SOURCE_METADATA_BLOCK$WORKED_EXAMPLE_BLOCK
 </task>
 
-$SOURCE_METADATA_BLOCK$PAPER_INPUT_BLOCK
+$PAPER_INPUT_BLOCK
