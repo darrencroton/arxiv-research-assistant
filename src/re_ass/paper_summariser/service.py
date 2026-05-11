@@ -55,8 +55,8 @@ _INLINE_FOOTNOTE_RE = re.compile(r"\[\^\d+\]")
 _REFERENCES_HEADING_RE = re.compile(r"^## References\s*$", re.MULTILINE)
 _marker_models = None
 GLOSSARY_MAX_TERMS = 12
-_GLOSSARY_MAX_TOKENS = 800
-_TAGS_MAX_TOKENS = 150
+_GLOSSARY_MAX_TOKENS = 2048
+_TAGS_MAX_TOKENS = 512
 
 ARXIV_CATEGORY_KEYWORD_HEADINGS = {
     "astro-ph.CO": ("COSMOLOGY", "GALAXIES"),
@@ -291,7 +291,8 @@ class PaperSummariser:
             self.provider,
             config=self.config,
         )
-        summary = insert_section(summary, glossary_section)
+        if glossary_section:
+            summary = insert_section(summary, glossary_section)
         summary = insert_section(summary, tags_section)
         validate_summary(summary)
 
@@ -1050,31 +1051,39 @@ def build_tags_prompt(summary_text: str, keywords: str) -> tuple[str, str]:
 def generate_glossary(summary_text: str, provider: Provider, *, config: LlmConfig) -> str:
     """Generate and validate a glossary section from the completed summary."""
     system_prompt, user_prompt = build_glossary_prompt(summary_text)
-    section = call_llm_with_retry(
-        provider,
-        "",
-        False,
-        system_prompt,
-        user_prompt,
-        max_tokens=min(config.max_output_tokens, _GLOSSARY_MAX_TOKENS),
-        max_retries=config.retry_attempts,
-        response_validator=validate_glossary_section,
-    )
-    return _normalise_generated_section(section, "## Glossary")
+    try:
+        section = call_llm_with_retry(
+            provider,
+            "",
+            False,
+            system_prompt,
+            user_prompt,
+            max_tokens=min(config.max_output_tokens, _GLOSSARY_MAX_TOKENS),
+            max_retries=config.retry_attempts,
+            response_validator=validate_glossary_section,
+        )
+        return _normalise_generated_section(section, "## Glossary")
+    except (PaperSummariserError, ValueError) as error:
+        LOGGER.warning("Glossary generation failed; skipping section: %s", error)
+        return ""
 
 
 def generate_tags(summary_text: str, keywords: str, provider: Provider, *, config: LlmConfig) -> str:
     """Generate a best-effort tags section from the completed summary."""
     system_prompt, user_prompt = build_tags_prompt(summary_text, keywords)
-    section = call_llm_with_retry(
-        provider,
-        "",
-        False,
-        system_prompt,
-        user_prompt,
-        max_tokens=min(config.max_output_tokens, _TAGS_MAX_TOKENS),
-        max_retries=config.retry_attempts,
-    )
+    try:
+        section = call_llm_with_retry(
+            provider,
+            "",
+            False,
+            system_prompt,
+            user_prompt,
+            max_tokens=min(config.max_output_tokens, _TAGS_MAX_TOKENS),
+            max_retries=config.retry_attempts,
+        )
+    except PaperSummariserError as error:
+        LOGGER.warning("Tag LLM call failed; using fallback tags: %s", error)
+        return build_fallback_tags(summary_text, keywords)
     try:
         return normalise_tags_section(section, available_keywords=keywords)
     except ValueError as error:

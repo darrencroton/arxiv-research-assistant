@@ -114,10 +114,10 @@ def test_summarise_source_uses_extracted_text(tmp_path: Path) -> None:
     assert "COSMOLOGY" in str(provider.calls[1]["user_prompt"])
     assert "PLANETARY SYSTEMS" not in str(provider.calls[1]["user_prompt"])
     assert provider.calls[1]["content"] == ""
-    assert provider.calls[1]["max_tokens"] == 150
+    assert provider.calls[1]["max_tokens"] == 512
     assert "---BEGIN SUMMARY---" in str(provider.calls[2]["user_prompt"])
     assert provider.calls[2]["content"] == ""
-    assert provider.calls[2]["max_tokens"] == 800
+    assert provider.calls[2]["max_tokens"] == 2048
 
 
 def test_summarise_source_uses_direct_pdf_when_provider_supports_it(tmp_path: Path) -> None:
@@ -523,7 +523,7 @@ def test_generate_tags_falls_back_for_unparseable_model_output(tmp_path: Path) -
     assert "#CosmologyObservations" in result
 
 
-def test_generate_tags_reraises_provider_failures(tmp_path: Path) -> None:
+def test_generate_tags_falls_back_on_provider_failure(tmp_path: Path) -> None:
     class FailingProvider(Provider):
         def setup(self):
             pass
@@ -534,13 +534,13 @@ def test_generate_tags_reraises_provider_failures(tmp_path: Path) -> None:
         def get_max_context_size(self):
             return 200_000
 
-    with pytest.raises(PaperSummariserError, match="API key missing"):
-        generate_tags(
-            "# Summary\n\nCosmology observations of galaxies.",
-            _KEYWORDS,
-            FailingProvider(),
-            config=make_app_config(tmp_path).llm,
-        )
+    result = generate_tags(
+        "# Summary\n\nCosmology observations of galaxies.",
+        _KEYWORDS,
+        FailingProvider(),
+        config=make_app_config(tmp_path).llm,
+    )
+    assert "## Tags" in result
 
 
 def test_insert_section_places_generated_content_before_references() -> None:
