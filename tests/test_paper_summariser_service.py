@@ -114,10 +114,10 @@ def test_summarise_source_uses_extracted_text(tmp_path: Path) -> None:
     assert "COSMOLOGY" in str(provider.calls[1]["user_prompt"])
     assert "PLANETARY SYSTEMS" not in str(provider.calls[1]["user_prompt"])
     assert provider.calls[1]["content"] == ""
-    assert provider.calls[1]["max_tokens"] == 512
+    assert provider.calls[1]["max_tokens"] == 12288
     assert "---BEGIN SUMMARY---" in str(provider.calls[2]["user_prompt"])
     assert provider.calls[2]["content"] == ""
-    assert provider.calls[2]["max_tokens"] == 2048
+    assert provider.calls[2]["max_tokens"] == 12288
 
 
 def test_summarise_source_uses_direct_pdf_when_provider_supports_it(tmp_path: Path) -> None:

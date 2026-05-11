@@ -55,8 +55,6 @@ _INLINE_FOOTNOTE_RE = re.compile(r"\[\^\d+\]")
 _REFERENCES_HEADING_RE = re.compile(r"^## References\s*$", re.MULTILINE)
 _marker_models = None
 GLOSSARY_MAX_TERMS = 12
-_GLOSSARY_MAX_TOKENS = 2048
-_TAGS_MAX_TOKENS = 512
 
 ARXIV_CATEGORY_KEYWORD_HEADINGS = {
     "astro-ph.CO": ("COSMOLOGY", "GALAXIES"),
@@ -1058,7 +1056,7 @@ def generate_glossary(summary_text: str, provider: Provider, *, config: LlmConfi
             False,
             system_prompt,
             user_prompt,
-            max_tokens=min(config.max_output_tokens, _GLOSSARY_MAX_TOKENS),
+            max_tokens=config.max_output_tokens,
             max_retries=config.retry_attempts,
             response_validator=validate_glossary_section,
         )
@@ -1078,7 +1076,7 @@ def generate_tags(summary_text: str, keywords: str, provider: Provider, *, confi
             False,
             system_prompt,
             user_prompt,
-            max_tokens=min(config.max_output_tokens, _TAGS_MAX_TOKENS),
+            max_tokens=config.max_output_tokens,
             max_retries=config.retry_attempts,
         )
     except PaperSummariserError as error:
