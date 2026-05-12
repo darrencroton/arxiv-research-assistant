@@ -97,10 +97,19 @@ def test_summarise_source_uses_extracted_text(tmp_path: Path) -> None:
     summariser = PaperSummariser(
         provider=provider,
         config=make_app_config(tmp_path).llm,
+        tag_categories=("astro-ph.CO",),
         input_reader=input_reader,
     )
 
-    result = summariser.summarise_source(make_paper(arxiv_id="1234.5678", title="Agents for Research"), source_path)
+    result = summariser.summarise_source(
+        make_paper(
+            arxiv_id="1234.5678",
+            title="Agents for Research",
+            primary_category="astro-ph.EP",
+            categories=("astro-ph.EP",),
+        ),
+        source_path,
+    )
 
     assert "## Key Ideas" in result.raw_summary
     assert result.pdf_url == "https://arxiv.org/pdf/1234.5678.pdf"
@@ -136,6 +145,7 @@ def test_summarise_source_keeps_existing_glossary_without_generating_another(tmp
     summariser = PaperSummariser(
         provider=provider,
         config=make_app_config(tmp_path).llm,
+        tag_categories=("astro-ph.CO",),
         input_reader=input_reader,
     )
 
@@ -163,6 +173,7 @@ def test_summarise_source_uses_direct_pdf_when_provider_supports_it(tmp_path: Pa
     summariser = PaperSummariser(
         provider=provider,
         config=make_app_config(tmp_path).llm,
+        tag_categories=("astro-ph.CO",),
         input_reader=input_reader,
     )
 
@@ -350,6 +361,7 @@ def test_summarise_source_fits_prompt_before_calling_provider(tmp_path: Path) ->
     summariser = PaperSummariser(
         provider=provider,
         config=make_app_config(tmp_path).llm,
+        tag_categories=("astro-ph.CO",),
         input_reader=input_reader,
     )
 
@@ -513,6 +525,15 @@ def test_normalise_tags_section_drops_unknown_science_line_tags() -> None:
     ) == "## Tags\n\n#JWST\n\n#GalaxiesHighRedshift"
 
 
+def test_normalise_tags_section_can_reject_unknown_science_line_tags() -> None:
+    with pytest.raises(ValueError, match="#MadeUpScienceTag"):
+        normalise_tags_section(
+            "## Tags\n\n#JWST\n\n#MadeUpScienceTag #GalaxiesHighRedshift",
+            _KEYWORDS,
+            reject_unknown_science_tags=True,
+        )
+
+
 def test_normalise_tags_section_truncates_too_many_tags() -> None:
     assert normalise_tags_section(
         "## Tags\n\n#A #B #C #D #E #F\n\n#GalaxiesHighRedshift",
@@ -548,6 +569,27 @@ def test_generate_tags_falls_back_for_unparseable_model_output(tmp_path: Path) -
     )
 
     assert "#CosmologyObservations" in result
+
+
+def test_generate_tags_retries_when_science_tags_are_outside_keyword_list(tmp_path: Path) -> None:
+    provider = RecordingProvider(
+        {
+            "response": [
+                "## Tags\n\n#JWST\n\n#MadeUpScienceTag #GalaxiesHighRedshift",
+                "## Tags\n\n#JWST\n\n#GalaxiesHighRedshift #CosmologyObservations",
+            ],
+        }
+    )
+
+    result = generate_tags(
+        "# Summary\n\nCosmology observations of high redshift galaxies.",
+        _KEYWORDS,
+        provider,
+        config=make_app_config(tmp_path).llm,
+    )
+
+    assert result == "## Tags\n\n#JWST\n\n#GalaxiesHighRedshift #CosmologyObservations"
+    assert len(provider.calls) == 2
 
 
 def test_generate_tags_falls_back_on_provider_failure(tmp_path: Path) -> None:

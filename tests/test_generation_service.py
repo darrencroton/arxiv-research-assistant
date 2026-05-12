@@ -60,6 +60,11 @@ def test_generation_service_fails_fast_when_provider_is_not_runtime_ready(tmp_pa
         GenerationService(config=make_app_config(tmp_path).llm, provider=ReadinessFailingProvider())
 
 
+def test_generation_service_requires_tag_categories_for_default_summariser(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="Tag categories"):
+        GenerationService(config=make_app_config(tmp_path).llm, provider=RecordingProvider(response=""))
+
+
 def test_generation_service_preserves_summariser_output_verbatim(tmp_path: Path) -> None:
     raw_summary = (
         "# Example Paper\n\n"

@@ -35,7 +35,7 @@ def _seed_defaults(tmp_path: Path) -> None:
 def test_prepare_workspace_warns_instead_of_failing_for_fresh_default_provider(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _seed_defaults(tmp_path)
 
-    def failing_generation_service(*, config) -> None:
+    def failing_generation_service(*, config, tag_categories) -> None:
         raise ValueError(f"{config.provider} not configured")
 
     monkeypatch.setattr("re_ass.setup.GenerationService", failing_generation_service)
@@ -68,7 +68,7 @@ def test_prepare_workspace_still_fails_for_existing_local_provider_config(tmp_pa
     user_preferences_dir.mkdir(exist_ok=True)
     (user_preferences_dir / "settings.toml").write_text(DEFAULT_SETTINGS, encoding="utf-8")
 
-    def failing_generation_service(*, config) -> None:
+    def failing_generation_service(*, config, tag_categories) -> None:
         raise ValueError(f"{config.provider} login missing")
 
     monkeypatch.setattr("re_ass.setup.GenerationService", failing_generation_service)
@@ -80,7 +80,8 @@ def test_prepare_workspace_still_fails_for_existing_local_provider_config(tmp_pa
 def test_prepare_workspace_validates_provider_when_local_config_is_ready(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _seed_defaults(tmp_path)
 
-    def passing_generation_service(*, config) -> object:
+    def passing_generation_service(*, config, tag_categories) -> object:
+        assert tag_categories == ("astro-ph.CO",)
         return object()
 
     monkeypatch.setattr("re_ass.setup.GenerationService", passing_generation_service)

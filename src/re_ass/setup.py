@@ -8,6 +8,7 @@ import sys
 
 from re_ass.bootstrap import default_project_root, ensure_user_preferences
 from re_ass.generation_service import GenerationService
+from re_ass.preferences import load_preferences
 from re_ass.settings import load_config
 
 
@@ -54,10 +55,11 @@ def prepare_workspace(project_root: Path | None = None) -> SetupSummary:
 
     created_user_files = tuple(ensure_user_preferences(root))
     config = load_config(project_root=root)
+    preferences = load_preferences(config.preferences_file)
 
     settings_bootstrapped = any(path.name == "settings.toml" for path in created_user_files)
     try:
-        GenerationService(config=config.llm)
+        GenerationService(config=config.llm, tag_categories=preferences.categories)
     except Exception as error:
         message = f"LLM provider validation failed for {config.llm.mode}/{config.llm.provider}: {error}"
         if not settings_bootstrapped:

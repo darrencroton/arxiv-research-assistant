@@ -468,7 +468,10 @@ def run(config: AppConfig, run_date: date | None = None, *, backfill: bool = Fal
             note_manager.rotate_weekly_note_if_needed(invocation_date)
 
         preferences = load_preferences(config.preferences_file)
-        generation_service = GenerationService(config=config.llm)
+        generation_service = GenerationService(
+            config=config.llm,
+            tag_categories=preferences.categories,
+        )
         fetcher = ArxivFetcher(page_size=config.arxiv_page_size)
         available_dates = list(fetcher.available_announcement_dates(preferences.categories))
 

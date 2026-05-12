@@ -209,11 +209,13 @@ class PaperSummariser:
         *,
         provider: Provider,
         config: LlmConfig,
+        tag_categories: tuple[str, ...],
         downloader: callable | None = None,
         input_reader: callable | None = None,
     ) -> None:
         self.provider = provider
         self.config = config
+        self.tag_categories = tag_categories
         self.downloader = downloader or (lambda paper, destination_dir: download_arxiv_pdf(paper, destination_dir, config))
         self.input_reader = input_reader or read_input_file
 
@@ -242,16 +244,15 @@ class PaperSummariser:
             paper_text = content
 
         source_metadata = extract_source_metadata(source_path, paper_text)
-        categories = (paper.primary_category, *paper.categories)
         filtered_keywords = filter_keywords_for_categories(
             project_knowledge.keywords,
-            categories,
+            self.tag_categories,
         )
         LOGGER.info(
-            "Tag keyword list: %s -> %s chars for categories: %s.",
+            "Tag keyword list: %s -> %s chars for configured categories: %s.",
             len(project_knowledge.keywords),
             len(filtered_keywords),
-            ", ".join(category for category in categories if category) or "none",
+            ", ".join(category for category in self.tag_categories if category) or "none",
         )
 
         system_prompt = create_system_prompt(project_knowledge.system_prompt_template)
@@ -959,7 +960,12 @@ def _render_tags_section(proper_tags: list[str], science_tags: list[str]) -> str
     return "\n".join(lines).rstrip()
 
 
-def normalise_tags_section(section_markdown: str, available_keywords: str | None = None) -> str:
+def normalise_tags_section(
+    section_markdown: str,
+    available_keywords: str | None = None,
+    *,
+    reject_unknown_science_tags: bool = False,
+) -> str:
     """Return a canonical Tags section after classifying candidate tags."""
     section = _normalise_generated_section(section_markdown, "## Tags")
     tag_lines = _non_empty_section_lines(section, "## Tags")
@@ -980,10 +986,10 @@ def normalise_tags_section(section_markdown: str, available_keywords: str | None
                 _append_unique_tag(proper_tags, tag)
 
     if dropped_science_tags:
-        LOGGER.warning(
-            "Dropped science tags outside supplied keyword list: %s",
-            ", ".join(dropped_science_tags),
-        )
+        message = "Science tags outside supplied keyword list: " + ", ".join(dropped_science_tags)
+        if reject_unknown_science_tags:
+            raise ValueError(message)
+        LOGGER.warning("Dropped %s", message[0].lower() + message[1:])
     if len(proper_tags) > 5:
         LOGGER.warning("Truncated proper-noun tags to 5 entries")
     if len(science_tags) > 5:
@@ -994,9 +1000,18 @@ def normalise_tags_section(section_markdown: str, available_keywords: str | None
     return _render_tags_section(proper_tags, science_tags)
 
 
-def validate_tags_section(section_markdown: str, available_keywords: str | None = None) -> None:
+def validate_tags_section(
+    section_markdown: str,
+    available_keywords: str | None = None,
+    *,
+    reject_unknown_science_tags: bool = False,
+) -> None:
     """Validate that generated tag markdown can be normalised."""
-    normalise_tags_section(section_markdown, available_keywords)
+    normalise_tags_section(
+        section_markdown,
+        available_keywords,
+        reject_unknown_science_tags=reject_unknown_science_tags,
+    )
 
 
 def build_glossary_prompt(summary_text: str) -> tuple[str, str]:
@@ -1038,6 +1053,10 @@ def build_tags_prompt(summary_text: str, keywords: str) -> tuple[str, str]:
         "models, software, or named catalogues from the summary only; no more than 5.\n"
         "- Second hashtag line: choose no more than 5 science-area hashtags from the "
         "available keyword list only.\n"
+        "- Copy science-area hashtags exactly as written in the list; do not invent, "
+        "rename, shorten, pluralise, or create aliases for science tags.\n"
+        "- If the best conceptual science tag is absent, choose the closest listed tag "
+        "that is justified by the summary, or omit it.\n"
         "- Use spaces between hashtags, not commas, bullets, or labels.\n"
         "- If fewer than 5 tags are justified, use fewer.\n"
         "- Do not include introductory text, commentary, or any other section.\n\n"
@@ -1082,12 +1101,21 @@ def generate_tags(summary_text: str, keywords: str, provider: Provider, *, confi
             user_prompt,
             max_tokens=config.max_output_tokens,
             max_retries=config.retry_attempts,
+            response_validator=lambda response: validate_tags_section(
+                response,
+                keywords,
+                reject_unknown_science_tags=True,
+            ),
         )
     except PaperSummariserError as error:
         LOGGER.warning("Tag LLM call failed; using fallback tags: %s", error)
         return build_fallback_tags(summary_text, keywords)
     try:
-        return normalise_tags_section(section, available_keywords=keywords)
+        return normalise_tags_section(
+            section,
+            available_keywords=keywords,
+            reject_unknown_science_tags=True,
+        )
     except ValueError as error:
         LOGGER.warning("Tag output could not be normalised; using fallback tags: %s", error)
         return build_fallback_tags(summary_text, keywords)

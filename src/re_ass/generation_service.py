@@ -33,6 +33,7 @@ class GenerationService:
         self,
         *,
         config: LlmConfig,
+        tag_categories: tuple[str, ...] | None = None,
         provider: Provider | None = None,
         paper_summariser: PaperSummariser | None = None,
     ) -> None:
@@ -46,10 +47,15 @@ class GenerationService:
         if callable(readiness_validator):
             readiness_validator()
 
-        self.paper_summariser = paper_summariser or PaperSummariser(
-            provider=self.provider,
-            config=self.config,
-        )
+        if paper_summariser is None:
+            if not tag_categories:
+                raise ValueError("Tag categories are required when creating the default paper summariser.")
+            paper_summariser = PaperSummariser(
+                provider=self.provider,
+                config=self.config,
+                tag_categories=tag_categories,
+            )
+        self.paper_summariser = paper_summariser
 
     def generate_micro_summary(self, paper: ArxivPaper) -> str:
         """Generate a 1-2 sentence micro-summary from title and abstract."""
