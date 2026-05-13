@@ -297,10 +297,6 @@ def _parse_ranked_payload(
     payload = _load_ranking_payload(response_text)
     raw_ranked = _ranked_entries_from_payload(payload)
     by_key = _candidate_lookup(candidates)
-    if len(raw_ranked) != len(by_key):
-        raise RankingError(
-            f"Ranking payload must return exactly {len(by_key)} ranked paper(s), got {len(raw_ranked)}."
-        )
 
     ranked: list[tuple[int, RankedPaper]] = []
     seen_ids: set[str] = set()
@@ -353,6 +349,33 @@ def _parse_ranked_payload(
             )
         )
         seen_ids.add(candidate_id)
+
+    missing_keys = set(by_key) - seen_ids
+    if missing_keys:
+        LOGGER.warning(
+            "LLM returned %s of %s ranked papers; %s missing candidates assigned score 0.",
+            len(seen_ids),
+            len(by_key),
+            len(missing_keys),
+        )
+        fill_position = len(raw_ranked)
+        for missing_key in sorted(missing_keys):
+            paper, source_id = by_key[missing_key]
+            ranked.append(
+                (
+                    fill_position,
+                    RankedPaper(
+                        paper=paper,
+                        paper_key=missing_key,
+                        source_id=source_id,
+                        score=0.0,
+                        rationale="not ranked",
+                        science_match=False if require_dual_match else None,
+                        method_match=False if require_dual_match else None,
+                    ),
+                )
+            )
+            fill_position += 1
 
     ranked.sort(key=lambda item: (-item[1].score, item[0], item[1].paper.title.casefold()))
     return [item for _position, item in ranked]

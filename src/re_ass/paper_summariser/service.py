@@ -28,6 +28,8 @@ from .providers.base import Provider
 
 # Required for marker-pdf on Apple Silicon — must be set before PyTorch is imported.
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+# Suppress tqdm progress bars; re-ass runs unattended and the noise pollutes stderr logs.
+os.environ.setdefault("TQDM_DISABLE", "1")
 load_dotenv()
 
 LOGGER = logging.getLogger(__name__)

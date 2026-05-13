@@ -371,12 +371,48 @@ def test_ranker_repairs_invalid_payload_once(tmp_path) -> None:
     assert "validation_error" in provider.calls[1]["user_prompt"]
 
 
-def test_ranker_requires_full_ranked_list_after_repair(tmp_path) -> None:
+def test_ranker_fills_missing_papers_with_score_zero(tmp_path) -> None:
     paper = make_paper(arxiv_id="2603.40051", title="Only Paper")
+    provider = RecordingProvider([json.dumps({"ranked_papers": []})])
+    ranker = PaperRanker(
+        provider=provider,
+        config=make_app_config(tmp_path).llm,
+        max_papers=1,
+        always_summarize_score=90.0,
+        min_selection_score=80.0,
+    )
+
+    selection = ranker.rank_papers(_preferences("Agents"), [paper])
+
+    assert selection.selected_papers == []
+    assert len(selection.ranked) == 1
+    assert selection.ranked[0].score == 0.0
+    assert len(provider.calls) == 1
+
+
+def test_ranker_requires_full_ranked_list_after_repair(tmp_path) -> None:
+    papers = [
+        make_paper(arxiv_id="2603.40051", title="Paper A"),
+        make_paper(arxiv_id="2603.40052", title="Paper B"),
+    ]
     provider = RecordingProvider(
         [
-            json.dumps({"ranked_papers": []}),
-            json.dumps({"ranked_papers": []}),
+            json.dumps(
+                {
+                    "ranked_papers": [
+                        {"candidate_id": "arxiv:2603.49999", "score": 97, "rationale": "Bad id."},
+                        {"candidate_id": "arxiv:2603.40052", "score": 75, "rationale": "Known id."},
+                    ]
+                }
+            ),
+            json.dumps(
+                {
+                    "ranked_papers": [
+                        {"candidate_id": "arxiv:2603.49999", "score": 97, "rationale": "Still bad id."},
+                        {"candidate_id": "arxiv:2603.40052", "score": 75, "rationale": "Known id."},
+                    ]
+                }
+            ),
         ]
     )
     ranker = PaperRanker(
@@ -388,7 +424,7 @@ def test_ranker_requires_full_ranked_list_after_repair(tmp_path) -> None:
     )
 
     with pytest.raises(RankingError, match="remained invalid after repair attempt"):
-        ranker.rank_papers(_preferences("Agents"), [paper])
+        ranker.rank_papers(_preferences("Agents"), papers)
     assert len(provider.calls) == 2
 
 

@@ -310,16 +310,20 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
     elif effort not in _VALID_LLM_EFFORTS:
         raise ValueError(f"llm.effort must be one of {_VALID_LLM_EFFORTS}, got '{effort}'.")
 
+    raw_temperature = float(llm_data.get("temperature", 0.2))
+    if not (0.0 <= raw_temperature <= 2.0):
+        raise ValueError(f"Setting [llm].temperature must be between 0.0 and 2.0, got {raw_temperature}.")
+
     llm = LlmConfig(
         mode=mode,
         provider=provider,
         model=model,
         effort=effort,
-        timeout_seconds=int(llm_data.get("timeout_seconds", 900)),
-        max_output_tokens=int(llm_data.get("max_output_tokens", 12288)),
+        timeout_seconds=_positive_int(llm_data, "timeout_seconds", "llm", default=900),
+        max_output_tokens=_positive_int(llm_data, "max_output_tokens", "llm", default=32768),
         max_prompt_chars=_optional_positive_int(llm_data.get("max_prompt_chars"), "[llm].max_prompt_chars"),
-        temperature=float(llm_data.get("temperature", 0.2)),
-        retry_attempts=int(llm_data.get("retry_attempts", 3)),
+        temperature=raw_temperature,
+        retry_attempts=_positive_int(llm_data, "retry_attempts", "llm", default=3),
         base_url=_optional_stripped_string(llm_data.get("base_url")),
         api_key_env=_optional_stripped_string(llm_data.get("api_key_env")),
         env_file=(
@@ -331,9 +335,9 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
             root,
             str(llm_data.get("prompt_debug_file", "tmp/paper_summariser/prompt.txt")),
         ),
-        download_timeout_seconds=int(llm_data.get("download_timeout_seconds", 120)),
-        max_pdf_size_mb=int(llm_data.get("max_pdf_size_mb", 100)),
-        marker_timeout_seconds=int(llm_data.get("marker_timeout_seconds", 300)),
+        download_timeout_seconds=_positive_int(llm_data, "download_timeout_seconds", "llm", default=120),
+        max_pdf_size_mb=_positive_int(llm_data, "max_pdf_size_mb", "llm", default=100),
+        marker_timeout_seconds=_positive_int(llm_data, "marker_timeout_seconds", "llm", default=300),
         ollama_base_url=str(llm_data.get("ollama_base_url", "http://localhost:11434")),
     )
 
