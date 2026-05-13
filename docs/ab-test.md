@@ -120,7 +120,7 @@ Walk the report top-down, per day:
    side-by-side`** — the R1 picture. The rationales tell you whether each
    side reasoned about the user's actual priorities (named) or applied
    generic interestingness.
-8. **`### Daily note`** — top-paper match, managed-heading present.
+8. **`### Daily note`** — top-paper match, managed-heading present, `managed_body_words`. Word count is scoped to the body inside the configured top-paper heading; the daily-note file may also carry user-owned content (tasks, meetings, freeform notes) that re-ass doesn't measure.
 9. **`### Weekly synthesis`** — orphan H2 count, word band, excerpt. R5+R6.
 10. **`### Paper-summary structure`** — for shared selections, word count and
     section/glossary/footnote counts. R4+R5.

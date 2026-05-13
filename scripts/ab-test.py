@@ -1035,15 +1035,6 @@ def _section_rationale_side_by_side(bench: dict[str, Any], variant: dict[str, An
     return out
 
 
-def _count_words(path: Path) -> int:
-    if not path.exists():
-        return 0
-    try:
-        return len(path.read_text(encoding="utf-8").split())
-    except OSError:
-        return 0
-
-
 # --------- new AI-focused diagnostics ---------
 
 _TS_IN_FILENAME_RE = re.compile(r"--(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{6}Z)\.json$")
@@ -1288,7 +1279,14 @@ def _section_daily_note(
     bench_paths: VariantPaths,
     variant_paths: VariantPaths,
 ) -> list[str]:
-    out = ["### Daily note (the note the user sees on the matching weekday)", ""]
+    out = [
+        "### Daily note (the note the user sees on the matching weekday)",
+        "",
+        "Word count is scoped to the body inside the configured top-paper "
+        "heading. The daily-note file may contain user-owned sections "
+        "(tasks, meetings, freeform notes) that re-ass has no opinion about.",
+        "",
+    ]
     bench_note_date = str(bench.get("note_date") or isodate)
     variant_note_date = str(variant.get("note_date") or isodate)
     bench_top = (bench.get("selected_paper_keys") or [None])[0]
@@ -1304,8 +1302,9 @@ def _section_daily_note(
         note = paths.daily_note(note_date)
         diag = _daily_note_health(note, paths.daily_top_paper_heading)
         out.append(
-            f"- {label} {note.name}: exists={diag['exists']} words={diag['words']}"
+            f"- {label} {note.name}: exists={diag['exists']}"
             f" managed_section_present={diag['heading_present']}"
+            f" managed_body_words={diag['body_words']}"
         )
         if diag["concerns"]:
             for c in diag["concerns"]:
@@ -1315,9 +1314,17 @@ def _section_daily_note(
 
 
 def _daily_note_health(note_path: Path, top_paper_heading: str) -> dict[str, Any]:
+    """Diagnostics for the part of the daily note re-ass actually owns.
+
+    Word count is scoped to the body inside `top_paper_heading`, not the whole
+    file: users often keep tasks, meetings and notes in the same daily note,
+    and re-ass has no opinion about that content. Structural concerns
+    (heading missing, heading duplicated) are still legitimate at the
+    whole-file level because the configured heading is reserved for re-ass.
+    """
     diag: dict[str, Any] = {
         "exists": note_path.exists(),
-        "words": 0,
+        "body_words": 0,
         "heading_present": False,
         "concerns": [],
     }
@@ -1329,9 +1336,10 @@ def _daily_note_health(note_path: Path, top_paper_heading: str) -> dict[str, Any
     except OSError as e:
         diag["concerns"].append(f"unreadable: {e}")
         return diag
-    diag["words"] = len(text.split())
     diag["heading_present"] = top_paper_heading in text
-    if not diag["heading_present"]:
+    if diag["heading_present"]:
+        diag["body_words"] = len(_extract_section(text, top_paper_heading).split())
+    else:
         diag["concerns"].append(f"configured top-paper heading '{top_paper_heading}' not found")
     if text.count(top_paper_heading) > 1:
         diag["concerns"].append(f"duplicate heading '{top_paper_heading}' present ({text.count(top_paper_heading)}×)")
