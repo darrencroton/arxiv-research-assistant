@@ -43,6 +43,7 @@ class LlmConfig:
     max_pdf_size_mb: int
     marker_timeout_seconds: int
     ollama_base_url: str
+    ranking_batch_size: int
 
     def provider_config(self) -> dict[str, object]:
         config: dict[str, object] = {
@@ -158,6 +159,17 @@ def _positive_int(data: dict[str, object], key: str, section_name: str, *, defau
         raise ValueError(f"Setting [{section_name}].{key} must be a positive integer.") from error
     if value <= 0:
         raise ValueError(f"Setting [{section_name}].{key} must be a positive integer.")
+    return value
+
+
+def _non_negative_int(data: dict[str, object], key: str, section_name: str, *, default: int) -> int:
+    raw_value = data.get(key, default)
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"Setting [{section_name}].{key} must be 0 or a positive integer.") from error
+    if value < 0:
+        raise ValueError(f"Setting [{section_name}].{key} must be 0 or a positive integer.")
     return value
 
 
@@ -339,6 +351,7 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
         max_pdf_size_mb=_positive_int(llm_data, "max_pdf_size_mb", "llm", default=100),
         marker_timeout_seconds=_positive_int(llm_data, "marker_timeout_seconds", "llm", default=300),
         ollama_base_url=str(llm_data.get("ollama_base_url", "http://localhost:11434")),
+        ranking_batch_size=_non_negative_int(llm_data, "ranking_batch_size", "llm", default=0),
     )
 
     return AppConfig(

@@ -67,6 +67,8 @@ def _ranked_item_summary(item, *, include_published: bool = False) -> dict[str, 
         result["science_match"] = item.science_match
     if item.method_match is not None:
         result["method_match"] = item.method_match
+    if getattr(item, "score_filled", False):
+        result["score_filled"] = True
     return result
 
 
@@ -378,6 +380,7 @@ def _run_announcement_day(
             max_papers=config.max_papers,
             always_summarize_score=config.always_summarize_score,
             min_selection_score=config.min_selection_score,
+            batch_size=config.llm.ranking_batch_size,
         )
         selection = ranker.rank_papers(preferences, candidates)
         selected_papers = selection.selected_papers

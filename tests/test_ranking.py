@@ -387,7 +387,57 @@ def test_ranker_fills_missing_papers_with_score_zero(tmp_path) -> None:
     assert selection.selected_papers == []
     assert len(selection.ranked) == 1
     assert selection.ranked[0].score == 0.0
+    assert selection.ranked[0].score_filled is True
     assert len(provider.calls) == 1
+
+
+def test_ranker_batches_candidates_and_merges_by_score(tmp_path) -> None:
+    papers = [
+        make_paper(arxiv_id="2603.40070", title="Batch One A"),
+        make_paper(arxiv_id="2603.40071", title="Batch One B"),
+        make_paper(arxiv_id="2603.40072", title="Batch Two Winner"),
+        make_paper(arxiv_id="2603.40073", title="Batch Two D"),
+    ]
+    provider = RecordingProvider(
+        [
+            json.dumps(
+                {
+                    "ranked_papers": [
+                        {"candidate_id": "arxiv:2603.40070", "score": 75, "rationale": "Good fit."},
+                        {"candidate_id": "arxiv:2603.40071", "score": 60, "rationale": "Partial fit."},
+                    ]
+                }
+            ),
+            json.dumps(
+                {
+                    "ranked_papers": [
+                        {"candidate_id": "arxiv:2603.40072", "score": 95, "rationale": "Excellent fit."},
+                        {"candidate_id": "arxiv:2603.40073", "score": 40, "rationale": "Weak fit."},
+                    ]
+                }
+            ),
+        ]
+    )
+    ranker = PaperRanker(
+        provider=provider,
+        config=make_app_config(tmp_path).llm,
+        max_papers=1,
+        always_summarize_score=90.0,
+        min_selection_score=70.0,
+        batch_size=2,
+    )
+
+    selection = ranker.rank_papers(_preferences("Agents"), papers)
+
+    assert len(provider.calls) == 2
+    assert [item.paper.title for item in selection.ranked] == [
+        "Batch Two Winner",
+        "Batch One A",
+        "Batch One B",
+        "Batch Two D",
+    ]
+    assert [paper.title for paper in selection.selected_papers] == ["Batch Two Winner"]
+    assert not any(r.score_filled for r in selection.ranked)
 
 
 def test_ranker_requires_full_ranked_list_after_repair(tmp_path) -> None:

@@ -28,3 +28,5 @@ user_preferences/*
 !user_preferences/templates/
 !user_preferences/templates/**
 .coverage
+
+docs/ab-test-*.md

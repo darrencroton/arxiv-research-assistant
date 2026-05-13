@@ -32,6 +32,7 @@ class RankedPaper:
     rationale: str
     science_match: bool | None = None
     method_match: bool | None = None
+    score_filled: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,10 +109,10 @@ def _ranking_system_prompt() -> str:
 def _ranking_response_shape(*, dual_match: bool) -> str:
     if dual_match:
         return (
-            '{"ranked_papers":[{"candidate_id":"arxiv:2603.12345","score":97,'
+            '{"ranked_papers":[{"candidate_id":"arxiv:0000.00000","score":97,'
             '"science_match":true,"method_match":true,"rationale":"short reason"}]}'
         )
-    return '{"ranked_papers":[{"candidate_id":"arxiv:2603.12345","score":97,"rationale":"short reason"}]}'
+    return '{"ranked_papers":[{"candidate_id":"arxiv:0000.00000","score":97,"rationale":"short reason"}]}'
 
 
 def _ranking_user_prompt(preferences: PreferenceConfig, candidates: list[ArxivPaper]) -> str:
@@ -353,7 +354,7 @@ def _parse_ranked_payload(
     missing_keys = set(by_key) - seen_ids
     if missing_keys:
         LOGGER.warning(
-            "LLM returned %s of %s ranked papers; %s missing candidates assigned score 0.",
+            "LLM returned %s of %s ranked papers; %s missing candidates filled with score 0.",
             len(seen_ids),
             len(by_key),
             len(missing_keys),
@@ -372,6 +373,7 @@ def _parse_ranked_payload(
                         rationale="not ranked",
                         science_match=False if require_dual_match else None,
                         method_match=False if require_dual_match else None,
+                        score_filled=True,
                     ),
                 )
             )
@@ -392,12 +394,14 @@ class PaperRanker:
         max_papers: int,
         always_summarize_score: float,
         min_selection_score: float,
+        batch_size: int = 0,
     ) -> None:
         self.provider = provider
         self.config = config
         self.max_papers = max(0, max_papers)
         self.always_summarize_score = always_summarize_score
         self.min_selection_score = min_selection_score
+        self.batch_size = max(0, batch_size)
 
     def rank_papers(
         self,
@@ -413,34 +417,26 @@ class PaperRanker:
                 weekly_interest=[],
             )
 
+        if self.batch_size > 0 and len(candidates) > self.batch_size:
+            batches = [
+                candidates[i : i + self.batch_size]
+                for i in range(0, len(candidates), self.batch_size)
+            ]
+            LOGGER.info(
+                "Ranking %s candidate(s) in %s batch(es) of up to %s.",
+                len(candidates),
+                len(batches),
+                self.batch_size,
+            )
+            all_ranked: list[RankedPaper] = []
+            for batch_index, batch in enumerate(batches, 1):
+                LOGGER.info("Ranking batch %s/%s (%s candidate(s)).", batch_index, len(batches), len(batch))
+                all_ranked.extend(self._rank_candidates_batch(preferences, batch))
+            ranked = sorted(all_ranked, key=lambda r: (-r.score, r.paper.title.casefold()))
+        else:
+            ranked = self._rank_candidates_batch(preferences, candidates)
+
         dual_match_required = _requires_dual_match(preferences)
-        response = self._request_ranking_response(preferences, candidates)
-
-        try:
-            ranked = _parse_ranked_payload(
-                response,
-                candidates,
-                require_dual_match=dual_match_required,
-            )
-        except RankingError as error:
-            LOGGER.warning("Ranking payload validation failed; retrying once: %s", error)
-            repair_response = self._repair_ranking_payload(
-                preferences,
-                candidates,
-                invalid_response=response,
-                validation_error=str(error),
-            )
-            try:
-                ranked = _parse_ranked_payload(
-                    repair_response,
-                    candidates,
-                    require_dual_match=dual_match_required,
-                )
-            except RankingError as repair_error:
-                raise RankingError(
-                    f"Ranking payload remained invalid after repair attempt: {repair_error}"
-                ) from repair_error
-
         eligible = [
             item
             for item in ranked
@@ -480,6 +476,38 @@ class PaperRanker:
             selected=selected,
             weekly_interest=weekly_interest,
         )
+
+    def _rank_candidates_batch(
+        self,
+        preferences: PreferenceConfig,
+        candidates: list[ArxivPaper],
+    ) -> list[RankedPaper]:
+        dual_match_required = _requires_dual_match(preferences)
+        response = self._request_ranking_response(preferences, candidates)
+        try:
+            return _parse_ranked_payload(
+                response,
+                candidates,
+                require_dual_match=dual_match_required,
+            )
+        except RankingError as error:
+            LOGGER.warning("Ranking payload validation failed; retrying once: %s", error)
+            repair_response = self._repair_ranking_payload(
+                preferences,
+                candidates,
+                invalid_response=response,
+                validation_error=str(error),
+            )
+            try:
+                return _parse_ranked_payload(
+                    repair_response,
+                    candidates,
+                    require_dual_match=dual_match_required,
+                )
+            except RankingError as repair_error:
+                raise RankingError(
+                    f"Ranking payload remained invalid after repair attempt: {repair_error}"
+                ) from repair_error
 
     def _request_ranking_response(
         self,

@@ -96,6 +96,7 @@ def make_app_config(tmp_path: Path, **overrides) -> AppConfig:
             max_pdf_size_mb=100,
             marker_timeout_seconds=300,
             ollama_base_url="http://localhost:11434",
+            ranking_batch_size=0,
         ),
     )
     config = replace(config, **overrides)
