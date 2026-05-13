@@ -125,9 +125,29 @@ def _bootstrap_runtime(
     state_store.bootstrap()
 
 
-def _run_summary_base(invocation_date: date) -> dict[str, object]:
+def _llm_stamp(config: AppConfig) -> dict[str, object]:
+    """Snapshot of the LLM config the pipeline is about to use.
+
+    Persisted into every run summary so the A/B compare script (and any
+    after-the-fact audit) can identify the model/provider/effort actually
+    in play without re-reading the settings TOML, which may have drifted
+    by then.
+    """
+    llm = config.llm
+    return {
+        "mode": llm.mode,
+        "provider": llm.provider,
+        "model": llm.model,
+        "effort": llm.effort,
+        "temperature": llm.temperature,
+        "max_output_tokens": llm.max_output_tokens,
+    }
+
+
+def _run_summary_base(invocation_date: date, llm_stamp: dict[str, object] | None = None) -> dict[str, object]:
     return {
         "run_date": invocation_date.isoformat(),
+        "llm": llm_stamp or {},
         "announcement_date": None,
         "note_date": None,
         "available_announcement_dates": [],
@@ -334,7 +354,7 @@ def _run_announcement_day(
     fetcher: ArxivFetcher,
     backfill: bool,
 ) -> int:
-    run_summary = _run_summary_base(invocation_date)
+    run_summary = _run_summary_base(invocation_date, _llm_stamp(config))
     _populate_run_summary_dates(
         run_summary,
         available_dates=available_dates,
@@ -460,7 +480,7 @@ def run(config: AppConfig, run_date: date | None = None, *, backfill: bool = Fal
     note_manager = NoteManager(config)
     state_store = StateStore(config)
 
-    overall_summary = _run_summary_base(invocation_date)
+    overall_summary = _run_summary_base(invocation_date, _llm_stamp(config))
 
     try:
         _bootstrap_runtime(config, note_manager, state_store, reference_date=invocation_date)

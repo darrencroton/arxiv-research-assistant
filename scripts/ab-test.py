@@ -117,7 +117,9 @@ STEP-BY-STEP
 3. compare [--name <variant>] [options]
 
     Reads both TOMLs, uses the [state] and [output] roots inside them to
-    discover artifacts, and produces a side-by-side report.
+    discover artifacts, and produces a side-by-side report calibrated for
+    AI-assisted analysis (see docs/ab-test.md for the user stories, rubric,
+    and reviewer playbook the report is shaped around).
 
     Options:
       --name <variant>     auto-detected if exactly one settings-*.toml exists
@@ -129,25 +131,23 @@ STEP-BY-STEP
                            (current synthesis cycle)
       --all                every shared day
       --markdown           also write to docs/ab-test-<name>-<date>.md
+      --json               emit machine-readable findings (no markdown)
+      --no-ai-hints        omit the AI-reviewer header block
 
-    Report sections per day:
-      - Provider stamp (provider/model/effort each side actually used)
-      - Candidate alignment (set diff of candidate_keys; should be empty)
-      - Per-paper score deltas (sorted by |delta|, with science_match /
-        method_match agreement)
-      - Selection overlap (Jaccard + variant-only / benchmark-only lists)
-      - Rationale text side-by-side for the union of selected papers
-      - Daily / weekly synthesis word counts and excerpts
-      - Paper-note paths for external diffing
-
-    What to look for:
-      - Score deltas > ~20 on selected papers (scores are 0–100; the candidate
-        is misranking)
-      - Jaccard < 0.5 on selections (the candidate disagrees with benchmark
-        about what's worth reading)
-      - Empty / generic rationales (the candidate isn't reasoning about the
-        preference taxonomy)
-      - Big word-count deltas in synthesis (truncation, prompt-following)
+    Report sections per day, in reviewer-friendly order:
+      - Scoreboard (read first)
+      - Provider stamp (resolved from run-summary llm field, fallback settings)
+      - Reliability (fatal/warning/error log events scoped to this announcement)
+      - Candidate alignment (fetch-time parity prerequisite)
+      - Threshold discipline (how many papers each side pushed into the
+        always-summarize and min-selection bands)
+      - Top-10 ranking overlap (Jaccard at top-3/5/10 + Kendall τ on shared)
+      - Selection overlap (the visible top-N picks)
+      - Per-paper score deltas (sorted by |delta|)
+      - Rationale side-by-side for the union of selected papers
+      - Daily note health (top-paper match, managed-heading present)
+      - Weekly synthesis health (word band, orphan H2/H1 count, excerpt)
+      - Paper-summary structure (words, sections, glossary terms, footnotes)
 
 4. cleanup --name <variant>
 
@@ -522,9 +522,14 @@ class VariantPaths:
     state_runs_dir: Path
     logs_root: Path
     last_run_log: Path
+    history_log: Path
     weekly_note_filename: str
     rotation_day: str
     llm_block: dict[str, Any]
+    arxiv_thresholds: dict[str, Any]
+    weekly_synthesis_heading: str
+    weekly_synthesis_target: tuple[int, int]
+    daily_top_paper_heading: str
 
     def daily_note(self, isodate: str) -> Path:
         return self.daily_notes_dir / f"{isodate}.md"
@@ -578,11 +583,24 @@ def cmd_compare(args: argparse.Namespace) -> int:
         print("error: no dates matched the requested filter.", file=sys.stderr)
         return 1
 
+    if args.json:
+        findings = {
+            "variant": name,
+            "generated": dt.datetime.now().isoformat(timespec="seconds"),
+            "dates": list(target_dates),
+            "days": [
+                _structured_day_findings(d, bench_runs[d], variant_runs[d], bench, variant)
+                for d in target_dates
+            ],
+        }
+        print(json.dumps(findings, indent=2, default=str))
+        return 0
+
     sections: list[str] = []
     for d in target_dates:
         sections.append(_format_day_report(d, bench_runs[d], variant_runs[d], bench, variant))
 
-    report = _wrap_report(name, target_dates, sections)
+    report = _wrap_report(name, target_dates, sections, ai_hints=not args.no_ai_hints)
     print(report)
 
     if args.markdown:
@@ -598,6 +616,72 @@ def cmd_compare(args: argparse.Namespace) -> int:
     return 0
 
 
+def _structured_day_findings(
+    isodate: str,
+    bench: dict[str, Any],
+    variant: dict[str, Any],
+    bench_paths: VariantPaths,
+    variant_paths: VariantPaths,
+) -> dict[str, Any]:
+    """Machine-readable mirror of `_format_day_report` for AI/eval pipelines.
+
+    Same numbers; no markdown. Lets downstream tooling (eval rigs, dashboards,
+    other AI runs) consume the comparison without parsing prose.
+    """
+    bench_top = _topn_keys(bench.get("ranking_results") or [], n=10)
+    variant_top = _topn_keys(variant.get("ranking_results") or [], n=10)
+    shared = [k for k in bench_top if k in variant_top]
+    return {
+        "date": isodate,
+        "providers": {
+            "benchmark": _llm_view(bench, bench_paths),
+            variant_paths.name: _llm_view(variant, variant_paths),
+        },
+        "reliability": {
+            "benchmark": _reliability_for_side(isodate, bench, bench_paths),
+            variant_paths.name: _reliability_for_side(isodate, variant, variant_paths),
+        },
+        "candidate_counts": {
+            "benchmark": len(bench.get("candidate_keys") or []),
+            variant_paths.name: len(variant.get("candidate_keys") or []),
+            "jaccard": _jaccard(set(bench.get("candidate_keys") or []), set(variant.get("candidate_keys") or [])),
+        },
+        "selection": {
+            "benchmark": list(bench.get("selected_paper_keys") or []),
+            variant_paths.name: list(variant.get("selected_paper_keys") or []),
+            "jaccard": _jaccard(set(bench.get("selected_paper_keys") or []), set(variant.get("selected_paper_keys") or [])),
+        },
+        "topn": {
+            "benchmark_top10": bench_top,
+            f"{variant_paths.name}_top10": variant_top,
+            "kendall_tau_shared": _kendall_tau(shared, bench_top, variant_top) if len(shared) >= 2 else None,
+        },
+        "weekly_synthesis": {
+            "benchmark": _weekly_synthesis_health(bench_paths),
+            variant_paths.name: _weekly_synthesis_health(variant_paths),
+        },
+        "daily_note": {
+            "benchmark": _daily_note_health(bench_paths.daily_note(str(bench.get("note_date") or isodate)), bench_paths.daily_top_paper_heading),
+            variant_paths.name: _daily_note_health(variant_paths.daily_note(str(variant.get("note_date") or isodate)), variant_paths.daily_top_paper_heading),
+        },
+        "paper_summaries": {
+            key: {
+                "benchmark": _paper_summary_stats(bench_paths.summaries_dir, key),
+                variant_paths.name: _paper_summary_stats(variant_paths.summaries_dir, key),
+            }
+            for key in sorted(set(bench.get("selected_paper_keys") or []) | set(variant.get("selected_paper_keys") or []))
+        },
+    }
+
+
+def _jaccard(a: set[str], b: set[str]) -> float:
+    if not a and not b:
+        return 1.0
+    if not (a | b):
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
 def _resolve_variant_paths(name: str, settings_path: Path) -> VariantPaths:
     data = tomllib.loads(settings_path.read_text(encoding="utf-8"))
     output = data.get("output", {})
@@ -605,6 +689,7 @@ def _resolve_variant_paths(name: str, settings_path: Path) -> VariantPaths:
     logs = data.get("logs", {})
     notes = data.get("notes", {})
     llm = data.get("llm", {})
+    arxiv_cfg = data.get("arxiv", {})
 
     output_root = _expand(output.get("root", "output"))
     summaries_dir = _join(output_root, output.get("summaries_dir", "summaries"))
@@ -618,6 +703,12 @@ def _resolve_variant_paths(name: str, settings_path: Path) -> VariantPaths:
     if not logs_root.is_absolute():
         logs_root = (REPO_ROOT / logs_root).resolve()
     last_run_log = logs_root / str(logs.get("last_run_file", "last-run.log"))
+    history_log = logs_root / str(logs.get("history_file", "history.log"))
+
+    band = (
+        _coerce_int(notes.get("weekly_synthesis_word_limit_start"), 100),
+        _coerce_int(notes.get("weekly_synthesis_word_limit_end"), 200),
+    )
 
     return VariantPaths(
         name=name,
@@ -629,9 +720,18 @@ def _resolve_variant_paths(name: str, settings_path: Path) -> VariantPaths:
         state_runs_dir=state_runs_dir,
         logs_root=logs_root,
         last_run_log=last_run_log,
+        history_log=history_log,
         weekly_note_filename=str(notes.get("weekly_note_file", "this-weeks-arxiv-papers.md")),
         rotation_day=str(notes.get("rotation_day", "monday")).strip().lower(),
         llm_block=llm if isinstance(llm, dict) else {},
+        arxiv_thresholds={
+            "always_summarize_score": arxiv_cfg.get("always_summarize_score", 85),
+            "min_selection_score": arxiv_cfg.get("min_selection_score", 70),
+            "max_papers": arxiv_cfg.get("max_papers", 1),
+        },
+        weekly_synthesis_heading=str(notes.get("weekly_synthesis_heading", "## SYNTHESIS")),
+        weekly_synthesis_target=band,
+        daily_top_paper_heading=str(notes.get("daily_top_paper_heading", "## TODAY'S TOP PAPER")),
     )
 
 
@@ -714,7 +814,17 @@ def _select_target_dates(
 # --------- report formatting ---------
 
 
-def _wrap_report(name: str, dates: list[str], sections: list[str]) -> str:
+_AI_REVIEWER_PROMPT = """\
+> **For the AI reviewer**: read each day's `### Scoreboard` first; that tells
+> you whether a fatal/structural concern dominates a quality concern. Then walk
+> sections top-down. The report is designed so you should rarely need to open
+> the underlying notes or logs — but `docs/ab-test.md` (the rubric + user
+> stories) is the canonical lens for grading. Write your assessment against
+> those user stories; do not invent your own framing.
+"""
+
+
+def _wrap_report(name: str, dates: list[str], sections: list[str], *, ai_hints: bool) -> str:
     header = [
         f"# A/B comparison: benchmark vs {name}",
         "",
@@ -722,6 +832,9 @@ def _wrap_report(name: str, dates: list[str], sections: list[str]) -> str:
         f"Generated: {dt.datetime.now().isoformat(timespec='seconds')}",
         "",
     ]
+    if ai_hints:
+        header.append(_AI_REVIEWER_PROMPT)
+        header.append("")
     return "\n".join(header) + "\n\n".join(sections) + "\n"
 
 
@@ -732,48 +845,84 @@ def _format_day_report(
     bench_paths: VariantPaths,
     variant_paths: VariantPaths,
 ) -> str:
+    """Render a complete per-day comparison.
+
+    Sections are ordered to support an AI reviewer working top-down:
+    1. Headline scoreboard — read-in-5-seconds verdict per dimension.
+    2. Provider stamp — what each side actually used.
+    3. Reliability — fatal/warning/error events scoped to this announcement.
+    4. Candidate alignment — fetch-time parity, prerequisite for everything else.
+    5. Threshold discipline — selection-pressure calibration vs config.
+    6. Top-N ranking overlap, selection overlap, score deltas, rationales.
+    7. Daily-note and weekly-synthesis content (with structural integrity flags).
+    8. Paper-summary structure (word count, sections, glossary, footnotes).
+    """
     lines: list[str] = [f"## {isodate}", ""]
 
-    lines += _section_provider(bench_paths, variant_paths)
+    lines += _section_scoreboard(isodate, bench, variant, bench_paths, variant_paths)
+    lines += _section_provider(isodate, bench, variant, bench_paths, variant_paths)
+    lines += _section_reliability(isodate, bench, variant, bench_paths, variant_paths)
     lines += _section_candidate_alignment(bench, variant, variant_paths.name)
-    lines += _section_score_deltas(bench, variant, variant_paths.name)
+    lines += _section_threshold_discipline(bench, variant, variant_paths)
+    lines += _section_topn_overlap(bench, variant, variant_paths.name)
     lines += _section_selection_overlap(bench, variant, variant_paths.name)
+    lines += _section_score_deltas(bench, variant, variant_paths.name)
     lines += _section_rationale_side_by_side(bench, variant, variant_paths.name)
-    lines += _section_synthesis(isodate, bench_paths, variant_paths)
-    lines += _section_paper_note_paths(isodate, bench, variant, bench_paths, variant_paths)
+    lines += _section_daily_note(isodate, bench, variant, bench_paths, variant_paths)
+    lines += _section_weekly_synthesis(bench_paths, variant_paths)
+    lines += _section_paper_summary_structure(bench, variant, bench_paths, variant_paths)
 
     return "\n".join(lines)
 
 
+def _llm_view(run: dict[str, Any], paths: VariantPaths) -> dict[str, Any]:
+    """Prefer the run-summary's recorded llm stamp; fall back to settings TOML.
+
+    The settings TOML is what the *next* run will use — the recorded stamp
+    is what already happened.
+    """
+    stamp = run.get("llm")
+    if isinstance(stamp, dict) and stamp:
+        return stamp
+    return paths.llm_block
+
+
 def _section_provider(
+    isodate: str,
+    bench: dict[str, Any],
+    variant: dict[str, Any],
     bench_paths: VariantPaths,
     variant_paths: VariantPaths,
 ) -> list[str]:
-    return [
-        "### Provider stamp",
-        "",
-        f"- benchmark: {_provider_blurb(bench_paths)}",
-        f"- {variant_paths.name}: {_provider_blurb(variant_paths)}",
-        "",
-        "  (Source: `[llm]` block in each settings TOML. Confirm the run actually "
-        "used these by spot-checking the timestamps in each side's `last-run.log`.)",
-        "",
-    ]
+    out = ["### Provider stamp", ""]
+    out.append(f"- benchmark: {_provider_blurb(bench, bench_paths)}")
+    out.append(f"- {variant_paths.name}: {_provider_blurb(variant, variant_paths)}")
+    out.append("")
+    out.append(
+        "  (Resolved from the run-summary `llm` field where present, falling "
+        "back to the `[llm]` block of each settings TOML. The TOML reflects what "
+        "the *next* run will use; the stamp reflects what already happened.)"
+    )
+    out.append("")
+    return out
 
 
-def _provider_blurb(paths: VariantPaths) -> str:
+def _provider_blurb(run: dict[str, Any], paths: VariantPaths) -> str:
+    view = _llm_view(run, paths)
     parts = []
     for key in ("mode", "provider", "model", "effort"):
-        value = paths.llm_block.get(key)
+        value = view.get(key)
         if value not in (None, ""):
             parts.append(f"{key}={value}")
+    source = "run-summary" if (isinstance(run.get("llm"), dict) and run.get("llm")) else "settings TOML"
+    parts.append(f"(source: {source})")
     log_status = (
         f"last-run.log mtime={_format_mtime(paths.last_run_log)}"
         if paths.last_run_log.exists()
-        else f"last-run.log missing ({paths.last_run_log})"
+        else "last-run.log missing"
     )
     parts.append(log_status)
-    return " ".join(parts) if parts else "(no [llm] block in settings)"
+    return " ".join(parts) if parts else "(no llm metadata)"
 
 
 def _format_mtime(path: Path) -> str:
@@ -886,19 +1035,6 @@ def _section_rationale_side_by_side(bench: dict[str, Any], variant: dict[str, An
     return out
 
 
-def _section_synthesis(isodate: str, bench_paths: VariantPaths, variant_paths: VariantPaths) -> list[str]:
-    out = ["### Daily and weekly synthesis", ""]
-    for label, paths in (("benchmark", bench_paths), (variant_paths.name, variant_paths)):
-        daily = paths.daily_note(isodate)
-        out.append(f"- {label} daily note: {daily}")
-        out.append(f"    exists={daily.exists()}, words={_count_words(daily)}")
-        weekly = paths.weekly_live_note()
-        out.append(f"- {label} weekly live note: {weekly}")
-        out.append(f"    exists={weekly.exists()}, words={_count_words(weekly)}")
-    out.append("")
-    return out
-
-
 def _count_words(path: Path) -> int:
     if not path.exists():
         return 0
@@ -908,22 +1044,495 @@ def _count_words(path: Path) -> int:
         return 0
 
 
-def _section_paper_note_paths(
+# --------- new AI-focused diagnostics ---------
+
+_TS_IN_FILENAME_RE = re.compile(r"--(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{6}Z)\.json$")
+_LOG_TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})[,.]?(\d{3,6})?")
+_PIPELINE_BANNER_RE = re.compile(r"re-ass run (started|finished)")
+
+
+def _filename_timestamp(path: Path) -> dt.datetime | None:
+    m = _TS_IN_FILENAME_RE.search(path.name)
+    if not m:
+        return None
+    try:
+        return dt.datetime.strptime(m.group(1), "%Y-%m-%dT%H-%M-%S-%fZ").replace(tzinfo=dt.timezone.utc)
+    except ValueError:
+        return None
+
+
+def _fatal_runs_for_announcement(runs_dir: Path, announcement_date: str) -> list[Path]:
+    if not runs_dir.exists():
+        return []
+    return sorted(runs_dir.glob(f"*--announcement-{announcement_date}-fatal--*.json"))
+
+
+def _scan_log_window(log_path: Path, *, anchor: dt.datetime | None, window_minutes: int = 90) -> dict[str, Any]:
+    """Count WARNING / ERROR / fatal events around `anchor` in a log file.
+
+    Re-ass writes its history to `[logs].history_file`. Each line is prefixed
+    with an `asctime`-style timestamp. We count any line tagged WARNING or
+    ERROR within `±window_minutes` of `anchor` (the run-summary's filename
+    timestamp). When `anchor` is None we count over the whole file — useful
+    for a quick smoke check.
+
+    Returns a dict {warnings, errors, fatal, samples (deduped, ≤8)}.
+    """
+    out = {"warnings": 0, "errors": 0, "fatal": 0, "samples": [], "log_exists": log_path.exists()}
+    if not log_path.exists():
+        return out
+    try:
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        out["log_exists"] = False
+        return out
+
+    if anchor is not None:
+        start = anchor - dt.timedelta(minutes=window_minutes)
+        end = anchor + dt.timedelta(minutes=window_minutes)
+    else:
+        start = end = None
+
+    counts: dict[str, int] = {}
+    for raw in text.splitlines():
+        m = _LOG_TS_RE.match(raw)
+        if start is not None:
+            if m is None:
+                continue
+            try:
+                ts = dt.datetime.strptime(f"{m.group(1)} {m.group(2)}", "%Y-%m-%d %H:%M:%S").replace(tzinfo=dt.timezone.utc)
+            except ValueError:
+                continue
+            if ts < start or ts > end:
+                continue
+        if " WARNING " in raw or raw.endswith(" WARNING"):
+            out["warnings"] += 1
+            counts[_log_pattern(raw)] = counts.get(_log_pattern(raw), 0) + 1
+        elif " ERROR " in raw or raw.endswith(" ERROR"):
+            out["errors"] += 1
+            counts[_log_pattern(raw)] = counts.get(_log_pattern(raw), 0) + 1
+        if "Fatal" in raw or "fatal_error" in raw:
+            out["fatal"] += 1
+
+    out["samples"] = [
+        f"{count}× {pattern}" for pattern, count in sorted(counts.items(), key=lambda kv: -kv[1])[:8]
+    ]
+    return out
+
+
+def _log_pattern(line: str) -> str:
+    """Reduce a log line to a stable shape so duplicates can be counted.
+
+    Strips the leading timestamp/logger fields and elides obvious variable
+    bits (arxiv ids, paper keys, numbers) so "Glossary generation failed;
+    skipping section: …" lines bucket together regardless of paper.
+    """
+    body = line
+    body = re.sub(r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}[,.][\d]+\s+(WARNING|ERROR|INFO|DEBUG)\s+\S+:\s*", "", body)
+    body = re.sub(r"arxiv:\d{4}\.\d{4,6}", "arxiv:<id>", body)
+    body = re.sub(r"\b\d{4,}\b", "<n>", body)
+    return body.strip()[:120]
+
+
+def _section_reliability(
     isodate: str,
     bench: dict[str, Any],
     variant: dict[str, Any],
     bench_paths: VariantPaths,
     variant_paths: VariantPaths,
 ) -> list[str]:
-    out = ["### Paper-note paths (diff externally)", ""]
+    out = [
+        "### Reliability (this announcement window)",
+        "",
+        "Counts of WARNING / ERROR log lines within ±90 minutes of the run-summary "
+        "timestamp, plus any `*-fatal.json` siblings for this announcement date. A "
+        "clean side is `fatal=0 warnings=0 errors=0`. Recurring patterns (e.g. "
+        "\"Glossary generation failed\", \"tags outside supplied keyword list\") "
+        "point at the variant's prompt-following budget.",
+        "",
+    ]
     for label, run, paths in (
         ("benchmark", bench, bench_paths),
         (variant_paths.name, variant, variant_paths),
     ):
-        for key in (run.get("selected_paper_keys") or []):
-            # Filenames look like {YYYYMMDD}_{ID}.md; we don't reconstruct the exact name,
-            # we just point at the summaries dir and key.
-            out.append(f"- {label} {key}: {paths.summaries_dir} (search for {key.split('_', 1)[-1]})")
+        diag = _reliability_for_side(isodate, run, paths)
+        out.append(f"- **{label}**: fatal={diag['fatal']} warnings={diag['warnings']} errors={diag['errors']}")
+        if diag["fatal_messages"]:
+            for msg in diag["fatal_messages"]:
+                out.append(f"    - FATAL: {msg}")
+        if diag["samples"]:
+            out.append("    - top patterns:")
+            for sample in diag["samples"]:
+                out.append(f"      - {sample}")
+    out.append("")
+    return out
+
+
+def _reliability_for_side(isodate: str, run: dict[str, Any], paths: VariantPaths) -> dict[str, Any]:
+    # Anchor on the run-summary filename timestamp if we can find it; the
+    # caller already loaded the run dict but not its path, so re-locate.
+    anchor: dt.datetime | None = None
+    for p in paths.state_runs_dir.glob(f"*--announcement-{isodate}--*.json"):
+        if "fatal" in p.name:
+            continue
+        ts = _filename_timestamp(p)
+        if ts is not None and (anchor is None or ts > anchor):
+            anchor = ts
+
+    log_diag = _scan_log_window(paths.history_log, anchor=anchor)
+    fatal_paths = _fatal_runs_for_announcement(paths.state_runs_dir, isodate)
+    fatal_messages: list[str] = []
+    for fp in fatal_paths:
+        try:
+            data = json.loads(fp.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        err = data.get("fatal_error") or "(no fatal_error field)"
+        fatal_messages.append(f"{fp.name}: {err}")
+    if run.get("fatal_error"):
+        fatal_messages.append(f"in this run: {run['fatal_error']}")
+
+    return {
+        "fatal": len(fatal_messages),
+        "fatal_messages": fatal_messages,
+        "warnings": log_diag["warnings"],
+        "errors": log_diag["errors"],
+        "samples": log_diag["samples"],
+        "log_exists": log_diag["log_exists"],
+    }
+
+
+def _section_threshold_discipline(
+    bench: dict[str, Any],
+    variant: dict[str, Any],
+    variant_paths: VariantPaths,
+) -> list[str]:
+    out = [
+        "### Threshold discipline",
+        "",
+        "How many papers each side pushed into the `always_summarize_score` and "
+        "`min_selection_score` bands. A variant that consistently lands more papers "
+        "in the always-summarize band than the configured `max_papers` is rewarding "
+        "multi-match papers too aggressively (cost the user notices: more "
+        "summaries-per-day than expected).",
+        "",
+    ]
+    always = float(variant_paths.arxiv_thresholds.get("always_summarize_score", 85))
+    minsel = float(variant_paths.arxiv_thresholds.get("min_selection_score", 70))
+    max_papers = int(variant_paths.arxiv_thresholds.get("max_papers", 1) or 0)
+    out.append(f"  thresholds: always_summarize_score={always} min_selection_score={minsel} max_papers={max_papers}")
+    for label, run in (("benchmark", bench), (variant_paths.name, variant)):
+        rr = run.get("ranking_results") or []
+        n_always = sum(1 for x in rr if (x.get("score") or 0) >= always)
+        n_minsel = sum(1 for x in rr if (x.get("score") or 0) >= minsel)
+        selected = len(run.get("selected_paper_keys") or [])
+        flag = ""
+        if max_papers and n_always > max_papers:
+            flag = " ⚠ exceeds max_papers via always-summarize fill"
+        out.append(f"- **{label}**: ≥{always}: {n_always} | ≥{minsel}: {n_minsel} | selected: {selected}{flag}")
+    out.append("")
+    return out
+
+
+def _section_topn_overlap(bench: dict[str, Any], variant: dict[str, Any], name: str) -> list[str]:
+    """Top-N agreement is a more honest signal than selection overlap.
+
+    Selection overlap can be 0 between two providers who agree to within a
+    few points on the top-3 ranking, simply because `max_papers = 1`. Top-N
+    overlap captures the underlying agreement: are they reading the same
+    pool of papers as "interesting"?
+    """
+    bench_top = _topn_keys(bench.get("ranking_results") or [], n=10)
+    variant_top = _topn_keys(variant.get("ranking_results") or [], n=10)
+    out = ["### Top-10 ranking overlap", ""]
+    for n in (3, 5, 10):
+        b = set(bench_top[:n])
+        v = set(variant_top[:n])
+        inter = b & v
+        union = b | v
+        j = (len(inter) / len(union)) if union else 1.0
+        out.append(f"- top-{n} Jaccard: {j:.2f} (shared {len(inter)} / union {len(union)})")
+    out.append("")
+    out.append(f"  benchmark top-10: {bench_top}")
+    out.append(f"  {name} top-10:    {variant_top}")
+    out.append("")
+    shared_positions = [k for k in bench_top if k in variant_top]
+    if len(shared_positions) >= 2:
+        tau = _kendall_tau(shared_positions, bench_top, variant_top)
+        out.append(f"  Kendall τ on shared keys (top-10): {tau:+.2f}  (+1 = same order, 0 = unrelated, −1 = reversed)")
+    out.append("")
+    return out
+
+
+def _topn_keys(ranking_results: list[dict[str, Any]], *, n: int) -> list[str]:
+    ranked = sorted(ranking_results, key=lambda x: -float(x.get("score") or 0))
+    return [str(item.get("paper_key", "?")) for item in ranked[:n]]
+
+
+def _kendall_tau(shared: list[str], bench_top: list[str], variant_top: list[str]) -> float:
+    bench_rank = {k: i for i, k in enumerate(bench_top)}
+    variant_rank = {k: i for i, k in enumerate(variant_top)}
+    pairs = [(bench_rank[a], variant_rank[a], bench_rank[b], variant_rank[b])
+             for i, a in enumerate(shared) for b in shared[i + 1:]]
+    if not pairs:
+        return 0.0
+    concordant = sum(1 for ba, va, bb, vb in pairs if (ba < bb) == (va < vb))
+    discordant = len(pairs) - concordant
+    return (concordant - discordant) / len(pairs)
+
+
+def _section_daily_note(
+    isodate: str,
+    bench: dict[str, Any],
+    variant: dict[str, Any],
+    bench_paths: VariantPaths,
+    variant_paths: VariantPaths,
+) -> list[str]:
+    out = ["### Daily note (the note the user sees on the matching weekday)", ""]
+    bench_note_date = str(bench.get("note_date") or isodate)
+    variant_note_date = str(variant.get("note_date") or isodate)
+    bench_top = (bench.get("selected_paper_keys") or [None])[0]
+    variant_top = (variant.get("selected_paper_keys") or [None])[0]
+    out.append(
+        f"- top-paper match: {'✓' if bench_top and bench_top == variant_top else '✗'}"
+        f" — benchmark={bench_top}  {variant_paths.name}={variant_top}"
+    )
+    for label, note_date, paths in (
+        ("benchmark", bench_note_date, bench_paths),
+        (variant_paths.name, variant_note_date, variant_paths),
+    ):
+        note = paths.daily_note(note_date)
+        diag = _daily_note_health(note, paths.daily_top_paper_heading)
+        out.append(
+            f"- {label} {note.name}: exists={diag['exists']} words={diag['words']}"
+            f" managed_section_present={diag['heading_present']}"
+        )
+        if diag["concerns"]:
+            for c in diag["concerns"]:
+                out.append(f"    ⚠ {c}")
+    out.append("")
+    return out
+
+
+def _daily_note_health(note_path: Path, top_paper_heading: str) -> dict[str, Any]:
+    diag: dict[str, Any] = {
+        "exists": note_path.exists(),
+        "words": 0,
+        "heading_present": False,
+        "concerns": [],
+    }
+    if not note_path.exists():
+        diag["concerns"].append(f"note missing at {note_path}")
+        return diag
+    try:
+        text = note_path.read_text(encoding="utf-8")
+    except OSError as e:
+        diag["concerns"].append(f"unreadable: {e}")
+        return diag
+    diag["words"] = len(text.split())
+    diag["heading_present"] = top_paper_heading in text
+    if not diag["heading_present"]:
+        diag["concerns"].append(f"configured top-paper heading '{top_paper_heading}' not found")
+    if text.count(top_paper_heading) > 1:
+        diag["concerns"].append(f"duplicate heading '{top_paper_heading}' present ({text.count(top_paper_heading)}×)")
+    return diag
+
+
+def _section_weekly_synthesis(bench_paths: VariantPaths, variant_paths: VariantPaths) -> list[str]:
+    out = [
+        "### Weekly synthesis (current rolling note)",
+        "",
+        "The synthesis body sits inside the managed heading. Word-band targets "
+        "come from `[notes].weekly_synthesis_word_limit_*`. Orphan H2/H1 inside "
+        "the body indicates the model split the section — historically a "
+        "self-healing bug after re-ass v0.x.",
+        "",
+    ]
+    for label, paths in (("benchmark", bench_paths), (variant_paths.name, variant_paths)):
+        diag = _weekly_synthesis_health(paths)
+        target = f"{paths.weekly_synthesis_target[0]}–{paths.weekly_synthesis_target[1]}"
+        in_band = paths.weekly_synthesis_target[0] <= diag["body_words"] <= paths.weekly_synthesis_target[1]
+        band_flag = "" if in_band else f" ⚠ outside target band {target}"
+        out.append(f"- **{label}**: body_words={diag['body_words']} target={target}{band_flag}")
+        out.append(f"    file: {diag['path']}")
+        if diag["orphan_h2_count"]:
+            out.append(f"    ⚠ {diag['orphan_h2_count']} orphan H2 line(s) inside synthesis body: {diag['orphan_h2_samples']}")
+        if diag["orphan_h1_count"]:
+            out.append(f"    ⚠ {diag['orphan_h1_count']} orphan H1 line(s) inside synthesis body")
+        if diag["excerpt"]:
+            out.append("    excerpt (first ~60 words):")
+            out.append(f"      {diag['excerpt']}")
+    out.append("")
+    return out
+
+
+def _weekly_synthesis_health(paths: VariantPaths) -> dict[str, Any]:
+    diag: dict[str, Any] = {
+        "path": str(paths.weekly_live_note()),
+        "body_words": 0,
+        "orphan_h2_count": 0,
+        "orphan_h2_samples": [],
+        "orphan_h1_count": 0,
+        "excerpt": "",
+    }
+    note_path = paths.weekly_live_note()
+    if not note_path.exists():
+        return diag
+    try:
+        text = note_path.read_text(encoding="utf-8")
+    except OSError:
+        return diag
+    body = _extract_section(text, paths.weekly_synthesis_heading)
+    diag["body_words"] = len(body.split())
+
+    h2_lines = [line for line in body.splitlines() if line.startswith("## ")]
+    h1_lines = [line for line in body.splitlines() if line.startswith("# ")]
+    diag["orphan_h2_count"] = len(h2_lines)
+    diag["orphan_h2_samples"] = h2_lines[:3]
+    diag["orphan_h1_count"] = len(h1_lines)
+
+    words = body.split()
+    diag["excerpt"] = " ".join(words[:60]) + ("…" if len(words) > 60 else "")
+    return diag
+
+
+def _extract_section(text: str, heading: str) -> str:
+    """Return the body of a `## Foo` section, ending at the next `---` line
+    that's followed by `## ` (the re-ass managed-section convention)."""
+    lines = text.splitlines()
+    try:
+        start = lines.index(heading) + 1
+    except ValueError:
+        return ""
+    end = len(lines)
+    for i in range(start, len(lines) - 1):
+        if lines[i].strip() == "---":
+            j = i + 1
+            while j < len(lines) and not lines[j].strip():
+                j += 1
+            if j < len(lines) and lines[j].startswith("## "):
+                end = i
+                break
+    return "\n".join(lines[start:end]).strip()
+
+
+_PAPER_FILENAME_KEY_RE = re.compile(r"\[arXiv\s+(\d{4}\.\d{4,6})\]")
+
+
+def _section_paper_summary_structure(
+    bench: dict[str, Any],
+    variant: dict[str, Any],
+    bench_paths: VariantPaths,
+    variant_paths: VariantPaths,
+) -> list[str]:
+    out = [
+        "### Paper-summary structure (union of selected papers)",
+        "",
+        "Per side, for each selected paper, surface enough structural data "
+        "that an AI reviewer doesn't have to open the file just to know "
+        "whether sections are present and the glossary survived validation. "
+        "Big asymmetries (e.g. one side has 0 glossary terms because of "
+        "retries) signal where the model's instruction-following failed.",
+        "",
+    ]
+    union = sorted(set(bench.get("selected_paper_keys") or []) | set(variant.get("selected_paper_keys") or []))
+    if not union:
+        out.append("(no selections on either side)")
+        out.append("")
+        return out
+
+    for key in union:
+        out.append(f"- **{key}**")
+        for label, paths in (("benchmark", bench_paths), (variant_paths.name, variant_paths)):
+            stats = _paper_summary_stats(paths.summaries_dir, key)
+            if stats is None:
+                out.append(f"    - {label}: (no summary file found)")
+                continue
+            out.append(
+                f"    - {label}: words={stats['words']} "
+                f"sections={stats['section_count']} "
+                f"glossary_terms={stats['glossary_terms']} "
+                f"footnotes={stats['footnotes']} "
+                f"weaknesses={'yes' if stats['has_weaknesses'] else 'no'}"
+            )
+            if stats["missing_sections"]:
+                out.append(f"    ⚠ {label} missing sections: {', '.join(stats['missing_sections'])}")
+    out.append("")
+    return out
+
+
+_EXPECTED_SECTIONS = (
+    "Key Ideas", "Introduction", "Data", "Method", "Results",
+    "Discussion", "Weaknesses", "Conclusions", "Glossary", "Tags", "References",
+)
+
+
+def _paper_summary_stats(summaries_dir: Path, paper_key: str) -> dict[str, Any] | None:
+    if not summaries_dir.exists():
+        return None
+    arxiv_id = paper_key.split(":", 1)[-1]
+    matches = list(summaries_dir.glob(f"*{arxiv_id}*.md"))
+    if not matches:
+        return None
+    text = matches[0].read_text(encoding="utf-8", errors="replace")
+    section_count = sum(1 for line in text.splitlines() if line.startswith("## "))
+    present = {name.lower() for name in _EXPECTED_SECTIONS if f"## {name}".lower() in text.lower()}
+    missing = [name for name in _EXPECTED_SECTIONS if name.lower() not in present]
+    glossary_terms = 0
+    if "## Glossary" in text:
+        gloss = text.split("## Glossary", 1)[1].split("\n## ", 1)[0]
+        glossary_terms = sum(1 for line in gloss.splitlines() if line.strip().startswith("| **"))
+    footnotes = len(re.findall(r"^\[\^[^\]]+\]:", text, flags=re.MULTILINE))
+    return {
+        "path": str(matches[0]),
+        "words": len(text.split()),
+        "section_count": section_count,
+        "glossary_terms": glossary_terms,
+        "footnotes": footnotes,
+        "has_weaknesses": "## Weaknesses" in text,
+        "missing_sections": missing,
+    }
+
+
+def _section_scoreboard(
+    isodate: str,
+    bench: dict[str, Any],
+    variant: dict[str, Any],
+    bench_paths: VariantPaths,
+    variant_paths: VariantPaths,
+) -> list[str]:
+    """One-glance verdict for the AI reviewer.
+
+    Distilled to: did each side complete; do their candidate pools agree;
+    do their top picks agree; how clean is the variant's reliability log;
+    is the weekly synthesis structurally OK. Tells the reviewer where to
+    look first.
+    """
+    bench_rel = _reliability_for_side(isodate, bench, bench_paths)
+    var_rel = _reliability_for_side(isodate, variant, variant_paths)
+    bench_top = (bench.get("selected_paper_keys") or [None])[0]
+    variant_top = (variant.get("selected_paper_keys") or [None])[0]
+    cand_bench = set(bench.get("candidate_keys") or [])
+    cand_var = set(variant.get("candidate_keys") or [])
+    cand_jaccard = (len(cand_bench & cand_var) / len(cand_bench | cand_var)) if (cand_bench | cand_var) else 1.0
+
+    bench_weekly = _weekly_synthesis_health(bench_paths)
+    var_weekly = _weekly_synthesis_health(variant_paths)
+
+    def _flag(cond: bool) -> str:
+        return "✓" if cond else "✗"
+
+    rows = [
+        ("candidate-set parity (Jaccard)", f"{cand_jaccard:.2f}", _flag(cand_jaccard >= 0.95)),
+        ("top-1 selection agreement", _flag(bool(bench_top) and bench_top == variant_top), ""),
+        (f"benchmark reliability (fatal/W/E)", f"{bench_rel['fatal']}/{bench_rel['warnings']}/{bench_rel['errors']}", _flag(bench_rel["fatal"] == 0)),
+        (f"{variant_paths.name} reliability (fatal/W/E)", f"{var_rel['fatal']}/{var_rel['warnings']}/{var_rel['errors']}", _flag(var_rel["fatal"] == 0)),
+        (f"benchmark weekly synthesis structurally clean", _flag(bench_weekly["orphan_h2_count"] == 0 and bench_weekly["orphan_h1_count"] == 0), ""),
+        (f"{variant_paths.name} weekly synthesis structurally clean", _flag(var_weekly["orphan_h2_count"] == 0 and var_weekly["orphan_h1_count"] == 0), ""),
+    ]
+    out = ["### Scoreboard (read first)", ""]
+    for label, value, flag in rows:
+        out.append(f"- {label}: **{value}** {flag}".rstrip())
     out.append("")
     return out
 
@@ -1018,6 +1627,10 @@ def main(argv: list[str] | None = None) -> int:
                    help="shared days since the most recent [notes].rotation_day (current synthesis cycle)")
     g.add_argument("--all", action="store_true", help="every shared day")
     p_cmp.add_argument("--markdown", action="store_true", help="also write the report under docs/")
+    p_cmp.add_argument("--json", action="store_true",
+                       help="emit machine-readable JSON findings instead of the markdown report")
+    p_cmp.add_argument("--no-ai-hints", action="store_true",
+                       help="omit the 'for the AI reviewer' header block in the markdown report")
     p_cmp.set_defaults(func=cmd_compare)
 
     p_clean = sub.add_parser("cleanup", help="archive variant settings + uninstall launchd job")

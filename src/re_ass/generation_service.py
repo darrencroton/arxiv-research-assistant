@@ -20,6 +20,11 @@ _WEEKLY_SUMMARY_LINE = re.compile(r"(?m)^\*\*Summary:\*\*\s*(.+?)\s*$")
 _TRAILING_ARXIV_LINK = re.compile(r"\s+\[arXiv:[^\]]+\]\([^)]+\)\s*$")
 _MARKDOWN_LIST_ITEM = re.compile(r"^(?:[-*+]\s+|\d+\.\s+)")
 _MARKDOWN_HEADING = re.compile(r"^#{1,6}\s+")
+# Matches a leading H1 or H2 marker so it can be demoted to H3. The synthesis
+# body sits inside an H2 managed section; any H1/H2 the model emits would be
+# treated as the *next* section boundary by the note manager and would split
+# the synthesis on the following write.
+_TOP_LEVEL_HEADING_PREFIX = re.compile(r"^#{1,2}(?=\s)")
 
 
 class GenerationError(RuntimeError):
@@ -103,11 +108,13 @@ class GenerationService:
                     "Rewrite the weekly synthesis for this rolling research note from the full set of weekly paper "
                     "additions gathered so far. Produce a concise markdown synthesis that explains cross-paper "
                     "themes, methodological connections, tensions, and how the week's story is evolving. "
-                    "Prioritise synthesis over a paper-by-paper recap. Choose the clearest structure for the "
-                    "material: one short paragraph, multiple short paragraphs, bullets, or a mix. Use bullets only "
+                    "Prioritise synthesis over a paper-by-paper recap. Lead with the strongest cross-paper "
+                    "thread; bring in a counterpoint where one exists. Prose, not bullets — use bullets only "
                     "when they genuinely improve readability. Keep the note quickly digestible, return markdown "
-                    "only, and aim for around "
-                    f"{word_limit} words."
+                    f"only, and aim for around {word_limit} words.\n\n"
+                    "Output rules: return ONLY the body text. Do NOT include any '#' or '##' headings — the "
+                    "calling note already supplies the section heading; an H1 or H2 in your output would split "
+                    "the surrounding note. Use H3 ('### ') or bold prose for any internal structure."
                 ),
                 (
                     f"Current synthesis:\n{existing_synthesis or '(none)'}\n\n"
@@ -177,7 +184,7 @@ class GenerationService:
 
             if _MARKDOWN_LIST_ITEM.match(stripped) or _MARKDOWN_HEADING.match(stripped):
                 flush_paragraph()
-                output_lines.append(stripped)
+                output_lines.append(_TOP_LEVEL_HEADING_PREFIX.sub("###", stripped))
                 continue
 
             paragraph_parts.append(stripped)

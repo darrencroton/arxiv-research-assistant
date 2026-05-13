@@ -324,6 +324,42 @@ def test_update_notes_uses_configured_managed_headings(tmp_path: Path) -> None:
     assert "### Monday 23rd" in weekly_text
 
 
+def test_update_weekly_note_heals_orphan_h2_inside_synthesis(tmp_path: Path) -> None:
+    """Legacy notes can contain an orphan H2 inside the synthesis body (e.g.
+    a model emitted "## Weekly Synthesis" by mistake). On the next write,
+    the orphan must be absorbed back into the managed section rather than
+    treated as a section boundary that splits the file."""
+    manager = NoteManager(make_app_config(tmp_path))
+    manager.bootstrap(reference_date=date(2026, 3, 24))
+    manager.weekly_note_path.write_text(
+        "# ARXIV PAPERS FOR THE WEEK 23rd - 27th March 2026\n\n"
+        "## SYNTHESIS\n\n"
+        "Stale lead synthesis.\n\n"
+        "## Weekly Synthesis\n\n"
+        "Orphan body the model accidentally emitted.\n\n"
+        "## Weekly Synthesis\n\n"
+        "Second orphan from a retry.\n\n"
+        "---\n"
+        "## DAILY ADDITIONS\n\n",
+        encoding="utf-8",
+    )
+
+    manager.update_weekly_note(
+        date(2026, 3, 24),
+        [make_processed_paper(tmp_path, micro_summary="Fresh summary.")],
+        "Fresh synthesis paragraph.",
+    )
+
+    weekly_text = manager.weekly_note_path.read_text(encoding="utf-8")
+    assert weekly_text.count("## SYNTHESIS") == 1
+    assert "## Weekly Synthesis" not in weekly_text
+    assert "Fresh synthesis paragraph." in weekly_text
+    assert "Stale lead synthesis." not in weekly_text
+    assert "Orphan body the model accidentally emitted." not in weekly_text
+    assert "Second orphan from a retry." not in weekly_text
+    assert "## DAILY ADDITIONS" in weekly_text
+
+
 def test_update_daily_note_links_to_archived_weekly_note_for_catch_up_days(tmp_path: Path) -> None:
     manager = NoteManager(make_app_config(tmp_path))
     manager.bootstrap()
