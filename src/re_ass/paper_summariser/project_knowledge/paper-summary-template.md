@@ -29,10 +29,12 @@ Published: Month Year ([Link](<URL to paper>) <- ONLY if you see the arxiv or do
 ## Discussion
 
 - No more than 3 bullets, each with a footnote
+- Place the paper against prior work: name the model, survey, or observation it extends, contradicts, or builds on. Avoid plain recap of the Results.
 
 ## Weaknesses
 
 - No more than 3 bullets, each with a footnote
+- Be concrete and named: identify the missing physics, the untested regime, the unmodelled dataset. "Limited sample" or "needs follow-up" is not a weakness; "omits Pop III stars at z>12" is.
 
 ## Conclusions
 
