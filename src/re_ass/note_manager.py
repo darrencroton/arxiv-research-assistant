@@ -54,25 +54,42 @@ def _section_bounds(lines: list[str], heading: str) -> tuple[int, int] | None:
     if heading_index is None:
         return None
 
-    next_heading_index: int | None = None
+    # Preferred boundary: the next "## " heading preceded by a "---" delimiter
+    # line — the convention re-ass templates use between managed sections.
+    # If no such delimited boundary exists, fall back to the first "## "
+    # heading after the managed heading (preserves behaviour for templates
+    # that don't separate H2 sections with "---").
+    #
+    # The two-tier scan lets an orphan "## " heading inside the body — e.g.
+    # one an LLM accidentally emitted into the synthesis text — be absorbed
+    # back into this section when a later "---"-delimited boundary is
+    # available, so the next write self-heals the note.
+    first_h2: int | None = None
+    delimiter_line: int | None = None
     for index in range(heading_index + 1, len(lines)):
-        if _is_top_level_heading(lines[index]):
-            next_heading_index = index
+        if not _is_top_level_heading(lines[index]):
+            continue
+        if first_h2 is None:
+            first_h2 = index
+        probe = index - 1
+        while probe > heading_index and not lines[probe].strip():
+            probe -= 1
+        if probe > heading_index and lines[probe].strip() == "---":
+            delimiter_line = probe
             break
 
-    if next_heading_index is None:
-        return heading_index, len(lines)
+    if delimiter_line is not None:
+        return heading_index, delimiter_line
 
-    end_index = next_heading_index
-    probe = next_heading_index - 1
-    while probe > heading_index and not lines[probe].strip():
-        probe -= 1
-    if probe > heading_index and lines[probe].strip() == "---":
-        end_index = probe
-    else:
+    if first_h2 is not None:
+        end_index = first_h2
         while end_index > heading_index + 1 and not lines[end_index - 1].strip():
             end_index -= 1
+        return heading_index, end_index
 
+    end_index = len(lines)
+    while end_index > heading_index + 1 and not lines[end_index - 1].strip():
+        end_index -= 1
     return heading_index, end_index
 
 

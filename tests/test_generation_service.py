@@ -123,10 +123,13 @@ def test_generate_weekly_synthesis_uses_full_weekly_additions_and_word_limit(tmp
                 "Rewrite the weekly synthesis for this rolling research note from the full set of weekly paper "
                 "additions gathered so far. Produce a concise markdown synthesis that explains cross-paper "
                 "themes, methodological connections, tensions, and how the week's story is evolving. "
-                "Prioritise synthesis over a paper-by-paper recap. Choose the clearest structure for the "
-                "material: one short paragraph, multiple short paragraphs, bullets, or a mix. Use bullets only "
+                "Prioritise synthesis over a paper-by-paper recap. Lead with the strongest cross-paper "
+                "thread; bring in a counterpoint where one exists. Prose, not bullets — use bullets only "
                 "when they genuinely improve readability. Keep the note quickly digestible, return markdown "
-                "only, and aim for around 150 words."
+                "only, and aim for around 150 words.\n\n"
+                "Output rules: return ONLY the body text. Do NOT include any '#' or '##' headings — the "
+                "calling note already supplies the section heading; an H1 or H2 in your output would split "
+                "the surrounding note. Use H3 ('### ') or bold prose for any internal structure."
             ),
             "user_prompt": (
                 "Current synthesis:\nEarlier synthesis.\n\n"
@@ -157,6 +160,30 @@ def test_generate_weekly_synthesis_preserves_digestible_markdown_structure(tmp_p
     synthesis = service.generate_weekly_synthesis("Earlier synthesis.", "**Summary:** First summary.\n", word_limit=50)
 
     assert synthesis == "First line continues here.\n\n- Theme one\n- Theme two\n\nClosing thought."
+
+
+def test_generate_weekly_synthesis_demotes_h1_and_h2_headings_in_model_output(tmp_path: Path) -> None:
+    """A model that returns a leading H1/H2 inside the body would split the
+    surrounding note on the next write (the synthesis sits inside the H2
+    managed section). Demote those headings to H3 so the body is safe."""
+    provider = RecordingProvider(
+        response="# Weekly view\n\n## Weekly Synthesis\n\nBody paragraph.\n\n### Subsection\n\nStill fine."
+    )
+    service = GenerationService(
+        config=make_app_config(tmp_path).llm,
+        provider=provider,
+        paper_summariser=StubPaperSummariser(),
+    )
+
+    synthesis = service.generate_weekly_synthesis("Earlier synthesis.", "**Summary:** s\n", word_limit=50)
+
+    lines = synthesis.splitlines()
+    assert "# Weekly view" not in lines
+    assert "## Weekly Synthesis" not in lines
+    assert "### Weekly view" in lines
+    assert "### Weekly Synthesis" in lines
+    assert "### Subsection" in lines
+    assert "Body paragraph." in lines
 
 
 def test_generate_weekly_synthesis_returns_full_response_without_hard_truncation(tmp_path: Path) -> None:
