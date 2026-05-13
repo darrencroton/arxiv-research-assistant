@@ -63,11 +63,12 @@ model = "your-loaded-model-name"
 effort = ""
 base_url = "http://127.0.0.1:1234/v1"
 api_key_env = ""
+env_file = ""
 timeout_seconds = 3600
 max_prompt_chars = 1000000
 ```
 
-For authenticated OpenAI-compatible endpoints, set `api_key_env` to the environment variable that holds the key, for example `api_key_env = "LOCAL_LLM_API_KEY"`. For local servers with no authentication, leave it blank.
+For authenticated OpenAI-compatible endpoints, set `api_key_env` to the environment variable that holds the key, for example `api_key_env = "LOCAL_LLM_API_KEY"`. `re-ass` first reads that variable from the process environment, then from `env_file` when set, then from `~/.llm/.env.llm` by default. This keeps launchd jobs non-interactive without putting secrets into plist files. For local servers with no authentication, leave `api_key_env` blank.
 
 Example:
 

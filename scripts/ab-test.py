@@ -73,12 +73,16 @@ STEP-BY-STEP
         effort = ""
         base_url = "http://127.0.0.1:1234/v1"
         api_key_env = ""
+        env_file = ""
         timeout_seconds = 3600
         max_prompt_chars = 1000000
 
     `effort = ""` prevents CLI reasoning-effort settings from leaking into an
     API-backed local model. Increase timeout_seconds and max_prompt_chars when
-    testing slow, large-context local models.
+    testing slow, large-context local models. For authenticated endpoints, set
+    api_key_env to an environment variable name; launchd runs can resolve it
+    from env_file or the default ~/.llm/.env.llm without storing secrets in the
+    plist.
 
     `--force` overwrites an existing variant settings file.
 

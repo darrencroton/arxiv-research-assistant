@@ -139,3 +139,53 @@ def test_openai_compatible_readiness_checks_models_endpoint(
         "headers": {"Authorization": "Bearer test-key"},
         "timeout": 15.0,
     }
+
+
+def test_openai_compatible_loads_api_key_from_env_file(
+    tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clients: list[FakeOpenAIClient] = []
+    env_file = tmp_path / ".env.llm"
+    env_file.write_text(
+        "export OTHER_KEY=ignored\n"
+        "export LOCAL_LLM_API_KEY='env-file-key'\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.delenv("LOCAL_LLM_API_KEY", raising=False)
+
+    def fake_openai_client(**kwargs):
+        client = FakeOpenAIClient(**kwargs)
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr("openai.OpenAI", fake_openai_client)
+
+    OpenAICompatibleAPI(
+        {
+            "model": "local-model",
+            "base_url": "http://127.0.0.1:1234/v1",
+            "api_key_env": "LOCAL_LLM_API_KEY",
+            "env_file": str(env_file),
+        }
+    )
+
+    assert clients[0].kwargs["api_key"] == "env-file-key"
+    assert "LOCAL_LLM_API_KEY" not in __import__("os").environ
+
+
+def test_openai_compatible_fails_fast_when_configured_api_key_is_missing(
+    tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LOCAL_LLM_API_KEY", raising=False)
+    monkeypatch.setattr("openai.OpenAI", lambda **kwargs: FakeOpenAIClient(**kwargs))
+
+    with pytest.raises(ValueError, match=r"LOCAL_LLM_API_KEY"):
+        OpenAICompatibleAPI(
+            {
+                "model": "local-model",
+                "base_url": "http://127.0.0.1:1234/v1",
+                "api_key_env": "LOCAL_LLM_API_KEY",
+                "env_file": str(tmp_path / "missing.env"),
+            }
+        )

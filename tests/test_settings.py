@@ -90,6 +90,27 @@ def test_load_config_passes_openai_compatible_endpoint_settings(tmp_path: Path) 
     assert config.llm.provider_config()["api_key_env"] == "LOCAL_LLM_API_KEY"
 
 
+def test_load_config_passes_openai_compatible_env_file(tmp_path: Path) -> None:
+    env_file = tmp_path / "local-llm.env"
+    config_path = tmp_path / "settings.toml"
+    config_path.write_text(
+        f"{DEFAULT_HEADINGS}\n"
+        "[llm]\n"
+        "mode = 'api'\n"
+        "provider = 'openai-compatible'\n"
+        "model = 'local-model'\n"
+        "base_url = 'http://127.0.0.1:1234/v1'\n"
+        "api_key_env = 'LOCAL_LLM_API_KEY'\n"
+        "env_file = 'local-llm.env'\n",
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.llm.env_file == env_file.resolve()
+    assert config.llm.provider_config()["env_file"] == str(env_file.resolve())
+
+
 def test_load_config_uses_new_runtime_sections(tmp_path: Path) -> None:
     settings_dir = tmp_path / "user_preferences"
     settings_dir.mkdir(parents=True)

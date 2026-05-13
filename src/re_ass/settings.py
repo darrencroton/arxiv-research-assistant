@@ -37,6 +37,7 @@ class LlmConfig:
     retry_attempts: int
     base_url: str | None
     api_key_env: str | None
+    env_file: Path | None
     prompt_debug_file: Path
     download_timeout_seconds: int
     max_pdf_size_mb: int
@@ -59,6 +60,8 @@ class LlmConfig:
                 config["base_url"] = self.base_url
             if self.api_key_env:
                 config["api_key_env"] = self.api_key_env
+            if self.env_file:
+                config["env_file"] = str(self.env_file)
         if self.provider == "ollama":
             config["base_url"] = self.ollama_base_url
         return config
@@ -319,6 +322,11 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
         retry_attempts=int(llm_data.get("retry_attempts", 3)),
         base_url=_optional_stripped_string(llm_data.get("base_url")),
         api_key_env=_optional_stripped_string(llm_data.get("api_key_env")),
+        env_file=(
+            _resolve_path(root, str(llm_data.get("env_file")))
+            if _optional_stripped_string(llm_data.get("env_file"))
+            else None
+        ),
         prompt_debug_file=_resolve_path(
             root,
             str(llm_data.get("prompt_debug_file", "tmp/paper_summariser/prompt.txt")),

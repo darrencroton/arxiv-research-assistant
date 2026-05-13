@@ -90,6 +90,7 @@ def make_app_config(tmp_path: Path, **overrides) -> AppConfig:
             retry_attempts=3,
             base_url=None,
             api_key_env=None,
+            env_file=None,
             prompt_debug_file=tmp_path / "tmp" / "paper_summariser" / "prompt.txt",
             download_timeout_seconds=120,
             max_pdf_size_mb=100,

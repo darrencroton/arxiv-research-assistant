@@ -5,14 +5,63 @@ Providers use a single default context size per family (no per-model lookup dict
 and rely on auto-resolving model aliases when no explicit model is specified.
 """
 
-import os
 import base64
 import logging
+import os
+import shlex
+from pathlib import Path
 import requests
 
 from .base import Provider
 
 LOGGER = logging.getLogger(__name__)
+DEFAULT_ENV_FILE = Path("~/.llm/.env.llm").expanduser()
+
+
+def _lookup_env_file_value(path: Path, key: str) -> str:
+    """Return a shell-style env-file value without mutating process state."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return ""
+    except OSError as error:
+        raise ValueError(f"Could not read env file {path}: {error}") from error
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        name, separator, value = line.partition("=")
+        if separator != "=" or name.strip() != key:
+            continue
+        try:
+            parsed = shlex.split(value, comments=False, posix=True)
+        except ValueError as error:
+            raise ValueError(f"Could not parse {key} in env file {path}: {error}") from error
+        return parsed[0] if parsed else ""
+    return ""
+
+
+def _resolve_api_key(api_key_env: str, env_file: Path | None) -> str:
+    """Resolve an API key from the environment, then an optional/default env file."""
+    if not api_key_env:
+        return ""
+
+    api_key = os.getenv(api_key_env, "").strip()
+    if api_key:
+        return api_key
+
+    candidate = env_file or DEFAULT_ENV_FILE
+    api_key = _lookup_env_file_value(candidate, api_key_env).strip()
+    if api_key:
+        return api_key
+
+    raise ValueError(
+        f"OpenAI-compatible API provider is configured with [llm].api_key_env={api_key_env!r}, "
+        f"but that environment variable is not set and no value was found in {candidate}."
+    )
 
 
 class ClaudeAPI(Provider):
@@ -256,7 +305,9 @@ class OpenAICompatibleAPI(Provider):
             raise ValueError("OpenAI-compatible API provider requires [llm].model.")
 
         self.api_key_env = str(self.config.get("api_key_env") or "").strip()
-        self.api_key = os.getenv(self.api_key_env) if self.api_key_env else ""
+        raw_env_file = str(self.config.get("env_file") or "").strip()
+        self.env_file = Path(raw_env_file).expanduser() if raw_env_file else None
+        self.api_key = _resolve_api_key(self.api_key_env, self.env_file)
         self.client = openai.OpenAI(
             api_key=self.api_key or "not-needed",
             base_url=self.base_url,
