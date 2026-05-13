@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ from re_ass.paper_summariser.service import (
     ProjectKnowledge,
     SourceMetadata,
     build_fallback_tags,
+    generate_glossary,
     generate_tags,
     create_system_prompt,
     create_user_prompt,
@@ -462,6 +464,17 @@ def test_validate_glossary_section_accepts_markdown_table() -> None:
     )
 
 
+def test_validate_glossary_section_accepts_pipes_inside_math_code_and_escapes() -> None:
+    validate_glossary_section(
+        "## Glossary\n\n"
+        "| Term | Definition |\n"
+        "|---|---|\n"
+        "| **Conditional density** | The probability density $p(z|x)$ for redshift at fixed features. |\n"
+        "| **Pair cut** | A velocity cut $|\\Delta v| < 2000\\,\\text{km}\\,\\text{s}^{-1}$. |\n"
+        "| **Pipe token** | A literal `a|b` or escaped A\\|B value. |"
+    )
+
+
 def test_validate_glossary_section_rejects_extra_content() -> None:
     with pytest.raises(ValueError, match="only a two-column table"):
         validate_glossary_section(
@@ -496,6 +509,28 @@ def test_validate_glossary_section_rejects_too_many_terms() -> None:
             "|---|---|\n"
             f"{rows}"
         )
+
+
+def test_generate_glossary_preserves_last_invalid_candidate_after_retries(tmp_path: Path, caplog) -> None:
+    invalid_glossary = (
+        "## Glossary\n\n"
+        "| Term | Definition |\n"
+        "|---|---|\n"
+        "| **Redshift** | Stretching of observed wavelength by cosmic expansion. |\n\n"
+        "Additional commentary."
+    )
+    provider = RecordingProvider({"response": invalid_glossary})
+
+    with caplog.at_level(logging.WARNING, logger="re_ass.paper_summariser.service"):
+        result = generate_glossary(
+            "# Summary\n\nA summary discussing redshift.",
+            provider,
+            config=make_app_config(tmp_path).llm,
+        )
+
+    assert result == invalid_glossary
+    assert len(provider.calls) == 3
+    assert "preserving unvalidated glossary section" in caplog.text
 
 
 def test_normalise_tags_section_accepts_labeled_comma_separated_lines() -> None:

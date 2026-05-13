@@ -873,6 +873,63 @@ def call_llm_with_retry(
     raise PaperSummariserError(str(last_error or "Unknown LLM failure"))
 
 
+def call_glossary_llm_with_retry(
+    provider: Provider,
+    system_prompt: str,
+    user_prompt: str,
+    *,
+    max_tokens: int,
+    max_retries: int,
+) -> str:
+    """Generate a glossary, preserving the last non-empty candidate if validation fails."""
+    last_error: Exception | None = None
+    last_candidate = ""
+    for attempt in range(max_retries):
+        try:
+            LOGGER.info("Attempt %s/%s calling LLM...", attempt + 1, max_retries)
+            section = provider.process_document(
+                content="",
+                is_pdf=False,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                max_tokens=max_tokens,
+            )
+            if not section or not section.strip():
+                raise ValueError("LLM returned empty or whitespace-only response")
+            last_candidate = section
+            if _INLINE_FOOTNOTE_RE.search(section) and not _REFERENCES_HEADING_RE.search(section):
+                raise ValueError("Summary has inline footnote markers but is missing the ## References section")
+            validate_glossary_section(section)
+            LOGGER.info("LLM call successful (received ~%s chars)", len(section))
+            return _normalise_generated_section(section, "## Glossary")
+        except Exception as error:
+            last_error = error
+            LOGGER.error(
+                "Attempt %s failed — %s: %s",
+                attempt + 1,
+                provider.__class__.__name__,
+                error,
+            )
+            if not is_retryable_llm_error(error) or attempt == max_retries - 1:
+                break
+            wait_time = 2 ** (attempt + 1)
+            LOGGER.info("Waiting %ss before retry...", wait_time)
+            time.sleep(wait_time)
+
+    if last_candidate.strip():
+        LOGGER.warning(
+            "Glossary validation failed after %s attempt(s); preserving unvalidated glossary section: %s",
+            max_retries,
+            last_error or "Unknown validation failure",
+        )
+        try:
+            return _normalise_generated_section(last_candidate, "## Glossary")
+        except ValueError:
+            return f"## Glossary\n\n{last_candidate.strip()}"
+
+    raise PaperSummariserError(str(last_error or "Unknown LLM failure"))
+
+
 def _normalise_generated_section(markdown: str, expected_heading: str) -> str:
     """Return a generated section starting at its expected heading."""
     lines = [line.rstrip() for line in markdown.strip().splitlines()]
@@ -895,7 +952,36 @@ def _split_markdown_table_row(line: str) -> list[str] | None:
     stripped = line.strip()
     if not stripped.startswith("|") or not stripped.endswith("|"):
         return None
-    return [cell.strip() for cell in stripped.strip("|").split("|")]
+
+    cells: list[str] = []
+    current: list[str] = []
+    escaped = False
+    in_code = False
+    in_math = False
+    for char in stripped[1:-1]:
+        if escaped:
+            current.append(char)
+            escaped = False
+            continue
+        if char == "\\":
+            current.append(char)
+            escaped = True
+            continue
+        if char == "`" and not in_math:
+            in_code = not in_code
+            current.append(char)
+            continue
+        if char == "$" and not in_code:
+            in_math = not in_math
+            current.append(char)
+            continue
+        if char == "|" and not in_code and not in_math:
+            cells.append("".join(current).strip())
+            current = []
+            continue
+        current.append(char)
+    cells.append("".join(current).strip())
+    return cells
 
 
 def _is_markdown_separator_row(cells: list[str] | None) -> bool:
@@ -1073,17 +1159,13 @@ def generate_glossary(summary_text: str, provider: Provider, *, config: LlmConfi
     """Generate and validate a glossary section from the completed summary."""
     system_prompt, user_prompt = build_glossary_prompt(summary_text)
     try:
-        section = call_llm_with_retry(
+        return call_glossary_llm_with_retry(
             provider,
-            "",
-            False,
             system_prompt,
             user_prompt,
             max_tokens=config.max_output_tokens,
             max_retries=config.retry_attempts,
-            response_validator=validate_glossary_section,
         )
-        return _normalise_generated_section(section, "## Glossary")
     except (PaperSummariserError, ValueError) as error:
         LOGGER.warning("Glossary generation failed; skipping section: %s", error)
         return ""
