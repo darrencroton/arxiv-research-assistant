@@ -436,12 +436,11 @@ class PaperRanker:
             )
 
         batches = _split_into_batches(candidates, self.batch_size) if self.batch_size > 0 else [candidates]
-        if len(batches) > 1:
-            LOGGER.info(
-                "Ranking %s candidate(s) in %s batch(es).",
-                len(candidates),
-                len(batches),
-            )
+        LOGGER.info(
+            "Ranking %s candidate(s) in %s batch(es).",
+            len(candidates),
+            len(batches),
+        )
         all_ranked: list[RankedPaper] = []
         for batch_index, batch in enumerate(batches, 1):
             if len(batches) > 1:
