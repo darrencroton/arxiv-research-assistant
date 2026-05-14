@@ -4,7 +4,7 @@ set -euo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "$script_dir/../.." && pwd)"
 template="$script_dir/com.user.re-ass.plist.template"
-tmp_dir="$repo_root/tmp/launchd"
+tmp_dir="$repo_root/logs/launchd"
 log_dir="$repo_root/logs"
 output="$tmp_dir/com.user.re-ass.plist"
 

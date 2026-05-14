@@ -10,12 +10,10 @@ output/
 processed/
 state/
 logs/
-tmp/
 
 output-*/
 state-*/
 logs-*/
-tmp-*/
 
 .claude/
 .ai-orchestrator/

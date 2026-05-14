@@ -345,7 +345,7 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
         ),
         prompt_debug_file=_resolve_path(
             root,
-            str(llm_data.get("prompt_debug_file", "tmp/paper_summariser/prompt.txt")),
+            str(llm_data.get("prompt_debug_file", "logs/debug/paper_summariser/prompt.txt")),
         ),
         download_timeout_seconds=_positive_int(llm_data, "download_timeout_seconds", "llm", default=120),
         max_pdf_size_mb=_positive_int(llm_data, "max_pdf_size_mb", "llm", default=100),

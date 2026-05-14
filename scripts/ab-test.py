@@ -52,7 +52,7 @@ STEP-BY-STEP
       [state] root  -> append "-<name>"
       [logs]  root  -> append "-<name>"
       [llm] / [paper_summariser] prompt_debug_file
-        -> "tmp/..." becomes "tmp-<name>/..."
+        -> "logs/debug/..." becomes "logs-<name>/debug/..."
 
     The [llm] mode/provider/model/effort fields are left identical to the
     benchmark so a diff between settings.toml and settings-<name>.toml shows
@@ -188,7 +188,7 @@ BENCHMARK_SETTINGS = USER_PREFS / "settings.toml"
 LAUNCHD_DIR = REPO_ROOT / "scripts" / "launchd"
 LAUNCHD_TEMPLATE = LAUNCHD_DIR / "com.user.re-ass.plist.template"
 RENDER_SCRIPT = LAUNCHD_DIR / "render-plist.sh"
-RENDERED_BENCHMARK_PLIST = REPO_ROOT / "tmp" / "launchd" / "com.user.re-ass.plist"
+RENDERED_BENCHMARK_PLIST = REPO_ROOT / "logs" / "launchd" / "com.user.re-ass.plist"
 LAUNCH_AGENTS_DIR = Path.home() / "Library" / "LaunchAgents"
 ARCHIVE_DIR = REPO_ROOT / "archive" / "ab-test"
 DOCS_DIR = REPO_ROOT / "docs"
@@ -203,7 +203,7 @@ VARIANT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 # (section, key) -> rewrite strategy.
 # "append": new value is f"{old}-{name}".
-# "tmp_prefix": replace a leading "tmp/" with f"tmp-{name}/".
+# "logs_debug_prefix": replace a leading "logs/debug/" with f"logs-{name}/debug/".
 SETUP_RULES: dict[tuple[str, str], str] = {
     # output.root: only suffix when relative. If the user has set it to an
     # absolute iCloud/Dropbox vault path, the leaves below already get
@@ -215,9 +215,9 @@ SETUP_RULES: dict[tuple[str, str], str] = {
     ("output", "pdfs_dir"): "append",
     ("state", "root"): "append",
     ("logs", "root"): "append",
-    ("llm", "prompt_debug_file"): "tmp_prefix",
+    ("llm", "prompt_debug_file"): "logs_debug_prefix",
     # The defaults file puts prompt_debug_file under [paper_summariser]; cover both.
-    ("paper_summariser", "prompt_debug_file"): "tmp_prefix",
+    ("paper_summariser", "prompt_debug_file"): "logs_debug_prefix",
 }
 
 # At least one of these (section, key) entries must be successfully rewritten;
@@ -310,10 +310,10 @@ def _apply_rule(rule: str, value: str, name: str) -> str:
         stripped = value.rstrip("/")
         suffix = value[len(stripped):]  # "" or "/"
         return f"{stripped}-{name}{suffix}"
-    if rule == "tmp_prefix":
-        if value.startswith("tmp/"):
-            return f"tmp-{name}/" + value[len("tmp/"):]
-        # absolute or non-tmp prefix; leave as-is and let the user handle it
+    if rule == "logs_debug_prefix":
+        if value.startswith("logs/debug/"):
+            return f"logs-{name}/debug/" + value[len("logs/debug/"):]
+        # absolute or non-standard prefix; leave as-is and let the user handle it
         return value
     return value
 
@@ -355,7 +355,7 @@ def cmd_schedule(args: argparse.Namespace) -> int:
         minute=args.minute,
     )
 
-    rendered_dir = REPO_ROOT / "tmp" / "launchd"
+    rendered_dir = REPO_ROOT / "logs" / "launchd"
     rendered_dir.mkdir(parents=True, exist_ok=True)
     rendered_variant = rendered_dir / f"com.user.re-ass.{name}.plist"
     rendered_variant.write_text(variant_plist_text, encoding="utf-8")
@@ -1581,7 +1581,7 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
         print(f"(no launchd job to uninstall: {label})")
 
     print("\n*-{n}/ directories were NOT touched. To archive them too:".format(n=name))
-    for sub in (f"output-{name}", f"state-{name}", f"logs-{name}", f"tmp-{name}"):
+    for sub in (f"output-{name}", f"state-{name}", f"logs-{name}"):
         full = REPO_ROOT / sub
         if full.exists():
             print(f"  mv {full.relative_to(REPO_ROOT)} archive/ab-test/{sub}-$(date -u +%Y%m%dT%H%M%S)/")

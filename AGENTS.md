@@ -23,8 +23,7 @@
 - `user_preferences/`: local config plus tracked defaults/templates
 - `scripts/setup.sh`: first-time local bootstrap
 - `scripts/launchd/`: public-safe launchd template and renderer
-- `output/`, `state/`, `logs/`: active runtime directories (`output/summaries`, `output/daily-notes`, `output/weekly-notes`, `output/pdfs`)
-- `tmp/`: local scratch/debug output, never committed
+- `output/`, `state/`, `logs/`: active runtime directories (`output/summaries`, `output/daily-notes`, `output/weekly-notes`, `output/pdfs`; `logs/debug/paper_summariser/` for LLM prompt debug output; `logs/launchd/` for rendered plists)
 - `src/re_ass/preferences.py`: Markdown preference parsing for categories and flat or science/method priority sections
 - `src/re_ass/ranking.py`: full-pool LLM ranking and deterministic threshold/cap selection
 - `src/re_ass/paper_summariser/`: upstream-derived paper-note pipeline

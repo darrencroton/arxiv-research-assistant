@@ -138,7 +138,7 @@ def test_load_config_uses_new_runtime_sections(tmp_path: Path) -> None:
     assert config.weekly_synthesis_word_limit_end == 200
     assert config.shift_announcements_to_next_weekday is True
     assert config.llm.effort is None
-    assert config.llm.prompt_debug_file == (tmp_path / "tmp" / "paper_summariser" / "prompt.txt").resolve()
+    assert config.llm.prompt_debug_file == (tmp_path / "logs" / "debug" / "paper_summariser" / "prompt.txt").resolve()
 
 
 def test_load_config_treats_blank_llm_effort_as_unset(tmp_path: Path) -> None:
