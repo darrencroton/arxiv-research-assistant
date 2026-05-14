@@ -383,6 +383,24 @@ def _parse_ranked_payload(
     return [item for _position, item in ranked]
 
 
+_BATCH_OVERFLOW_FRACTION = 0.2
+
+
+def _split_into_batches(candidates: list[ArxivPaper], batch_size: int) -> list[list[ArxivPaper]]:
+    """Split candidates into the fewest evenly-sized batches where each fits within batch_size + 20%."""
+    n = len(candidates)
+    effective_max = batch_size + max(1, round(batch_size * _BATCH_OVERFLOW_FRACTION))
+    num_batches = max(1, (n + effective_max - 1) // effective_max)
+    base, extra = divmod(n, num_batches)
+    batches: list[list[ArxivPaper]] = []
+    start = 0
+    for i in range(num_batches):
+        size = base + (1 if i < extra else 0)
+        batches.append(candidates[start : start + size])
+        start += size
+    return batches
+
+
 class PaperRanker:
     """Rank all candidate papers, always keep the strongest, and overflow the rest to weekly interest."""
 
@@ -417,24 +435,19 @@ class PaperRanker:
                 weekly_interest=[],
             )
 
-        if self.batch_size > 0 and len(candidates) > self.batch_size:
-            batches = [
-                candidates[i : i + self.batch_size]
-                for i in range(0, len(candidates), self.batch_size)
-            ]
+        batches = _split_into_batches(candidates, self.batch_size) if self.batch_size > 0 else [candidates]
+        if len(batches) > 1:
             LOGGER.info(
-                "Ranking %s candidate(s) in %s batch(es) of up to %s.",
+                "Ranking %s candidate(s) in %s batch(es).",
                 len(candidates),
                 len(batches),
-                self.batch_size,
             )
-            all_ranked: list[RankedPaper] = []
-            for batch_index, batch in enumerate(batches, 1):
+        all_ranked: list[RankedPaper] = []
+        for batch_index, batch in enumerate(batches, 1):
+            if len(batches) > 1:
                 LOGGER.info("Ranking batch %s/%s (%s candidate(s)).", batch_index, len(batches), len(batch))
-                all_ranked.extend(self._rank_candidates_batch(preferences, batch))
-            ranked = sorted(all_ranked, key=lambda r: (-r.score, r.paper.title.casefold()))
-        else:
-            ranked = self._rank_candidates_batch(preferences, candidates)
+            all_ranked.extend(self._rank_candidates_batch(preferences, batch))
+        ranked = sorted(all_ranked, key=lambda r: (-r.score, r.paper.title.casefold()))
 
         dual_match_required = _requires_dual_match(preferences)
         eligible = [

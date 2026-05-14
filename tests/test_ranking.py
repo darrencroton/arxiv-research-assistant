@@ -3,7 +3,7 @@ import json
 import pytest
 
 from re_ass.models import PreferenceConfig
-from re_ass.ranking import PaperRanker, RankingError
+from re_ass.ranking import PaperRanker, RankingError, _split_into_batches
 from tests.support import make_app_config, make_paper
 
 
@@ -391,6 +391,38 @@ def test_ranker_fills_missing_papers_with_score_zero(tmp_path) -> None:
     assert len(provider.calls) == 1
 
 
+def test_split_into_batches_single_batch_within_overflow_tolerance() -> None:
+    papers = [make_paper(arxiv_id=f"2603.{40070 + i}") for i in range(32)]
+    # 32 papers, batch_size=30: effective_max=36, fits in one batch
+    batches = _split_into_batches(papers, 30)
+    assert len(batches) == 1
+    assert len(batches[0]) == 32
+
+
+def test_split_into_batches_even_split_uses_overflow_limit_as_divisor() -> None:
+    papers = [make_paper(arxiv_id=f"2603.{40070 + i}") for i in range(62)]
+    # 62 papers, batch_size=30: effective_max=36, ceil(62/36)=2 → [31, 31]
+    batches = _split_into_batches(papers, 30)
+    assert len(batches) == 2
+    assert [len(b) for b in batches] == [31, 31]
+
+
+def test_split_into_batches_three_way_split() -> None:
+    papers = [make_paper(arxiv_id=f"2603.{40070 + i}") for i in range(73)]
+    # 73 papers, batch_size=30: effective_max=36, ceil(73/36)=3 → [25, 24, 24]
+    batches = _split_into_batches(papers, 30)
+    assert len(batches) == 3
+    assert [len(b) for b in batches] == [25, 24, 24]
+
+
+def test_split_into_batches_at_exact_effective_max() -> None:
+    papers = [make_paper(arxiv_id=f"2603.{40070 + i}") for i in range(36)]
+    # 36 papers, batch_size=30: effective_max=36, still one batch
+    batches = _split_into_batches(papers, 30)
+    assert len(batches) == 1
+    assert len(batches[0]) == 36
+
+
 def test_ranker_batches_candidates_and_merges_by_score(tmp_path) -> None:
     papers = [
         make_paper(arxiv_id="2603.40070", title="Batch One A"),
@@ -398,6 +430,7 @@ def test_ranker_batches_candidates_and_merges_by_score(tmp_path) -> None:
         make_paper(arxiv_id="2603.40072", title="Batch Two Winner"),
         make_paper(arxiv_id="2603.40073", title="Batch Two D"),
     ]
+    # batch_size=2: effective_max=3, ceil(4/3)=2 → [2, 2]
     provider = RecordingProvider(
         [
             json.dumps(
