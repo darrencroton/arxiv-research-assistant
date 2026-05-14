@@ -137,17 +137,15 @@ def _ranking_user_prompt(preferences: PreferenceConfig, candidates: list[ArxivPa
             "- rationale must be one sentence and under 30 words.\n"
             "- science_match is true only if the paper clearly matches at least one science priority.\n"
             "- method_match is true only if the paper clearly matches at least one method priority.\n"
-            "- A paper should only receive a strong score if both science_match and method_match are true.\n"
-            "- Papers with only science_match or only method_match are partial fits and should score materially lower.\n"
             "- More matches are better, but one direct science match plus one direct method match can still be a strong fit.\n"
             "- Earlier numbers within each section matter more than later ones.\n"
             "- Score fit to the user's priorities, not general paper quality.\n"
         )
         scoring_guide = (
-            "- 90-100: exceptionally strong direct fit with at least one science match and one method match\n"
-            "- 80-89: clear keep with one good science match and one good method match\n"
-            "- 60-79: partial fit, usually science-only, method-only, or a weak connection between them\n"
-            "- 0-59: weak fit\n"
+            "- 90-100: strong dual fit — clear science match AND clear method match to high-ranked priorities\n"
+            "- 70-89: dual fit — both science_match and method_match are true; at least one a strong hit\n"
+            "- 40-69: one-sided — only science_match OR only method_match is true; score must not exceed 69\n"
+            "- 0-39: weak fit — no clear match in either category\n"
         )
     else:
         rules = (
@@ -446,6 +444,23 @@ class PaperRanker:
             if len(batches) > 1:
                 LOGGER.info("Ranking batch %s/%s (%s candidate(s)).", batch_index, len(batches), len(batch))
             all_ranked.extend(self._rank_candidates_batch(preferences, batch))
+
+        if len(batches) > 1:
+            finalist_threshold = max(0.0, self.min_selection_score - 20.0)
+            finalist_papers = [r.paper for r in all_ranked if r.score >= finalist_threshold]
+            if len(finalist_papers) > 1:
+                LOGGER.info(
+                    "Re-ranking %s finalist(s) from %s batches for calibrated global ordering.",
+                    len(finalist_papers),
+                    len(batches),
+                )
+                try:
+                    re_ranked = self._rank_candidates_batch(preferences, finalist_papers)
+                    re_ranked_by_key = {r.paper_key: r for r in re_ranked}
+                    all_ranked = [re_ranked_by_key.get(r.paper_key, r) for r in all_ranked]
+                except RankingError as error:
+                    LOGGER.warning("Finalist re-ranking failed; using per-batch scores: %s", error)
+
         ranked = sorted(all_ranked, key=lambda r: (-r.score, r.paper.title.casefold()))
 
         dual_match_required = _requires_dual_match(preferences)

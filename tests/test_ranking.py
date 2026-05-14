@@ -139,7 +139,7 @@ def test_ranker_requires_science_and_method_matches_when_sections_are_present(tm
     prompt = provider.calls[0]["user_prompt"]
     assert "<science_priorities>" in prompt
     assert "<method_priorities>" in prompt
-    assert "A paper should only receive a strong score if both science_match and method_match are true." in prompt
+    assert "score must not exceed 69" in prompt
     assert '"science_match":true' in prompt
 
 
@@ -431,6 +431,8 @@ def test_ranker_batches_candidates_and_merges_by_score(tmp_path) -> None:
         make_paper(arxiv_id="2603.40073", title="Batch Two D"),
     ]
     # batch_size=2: effective_max=3, ceil(4/3)=2 → [2, 2]
+    # After both batches a finalist re-ranking pass fires for papers scoring ≥50
+    # (min_selection_score-20), producing a third provider call.
     provider = RecordingProvider(
         [
             json.dumps(
@@ -449,6 +451,16 @@ def test_ranker_batches_candidates_and_merges_by_score(tmp_path) -> None:
                     ]
                 }
             ),
+            # Finalist re-ranking: the three papers that scored ≥50 get a calibrated pass.
+            json.dumps(
+                {
+                    "ranked_papers": [
+                        {"candidate_id": "arxiv:2603.40072", "score": 95, "rationale": "Excellent fit."},
+                        {"candidate_id": "arxiv:2603.40070", "score": 72, "rationale": "Good fit."},
+                        {"candidate_id": "arxiv:2603.40071", "score": 55, "rationale": "Partial fit."},
+                    ]
+                }
+            ),
         ]
     )
     ranker = PaperRanker(
@@ -462,7 +474,7 @@ def test_ranker_batches_candidates_and_merges_by_score(tmp_path) -> None:
 
     selection = ranker.rank_papers(_preferences("Agents"), papers)
 
-    assert len(provider.calls) == 2
+    assert len(provider.calls) == 3
     assert [item.paper.title for item in selection.ranked] == [
         "Batch Two Winner",
         "Batch One A",

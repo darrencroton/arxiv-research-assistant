@@ -126,7 +126,7 @@ def test_generate_weekly_synthesis_uses_full_weekly_additions_and_word_limit(tmp
                 "Prioritise synthesis over a paper-by-paper recap. Lead with the strongest cross-paper "
                 "thread; bring in a counterpoint where one exists. Prose, not bullets — use bullets only "
                 "when they genuinely improve readability. Keep the note quickly digestible, return markdown "
-                "only, and aim for around 150 words.\n\n"
+                "only. You must write no more than 150 words.\n\n"
                 "Output rules: return ONLY the body text. Do NOT include any '#' or '##' headings — the "
                 "calling note already supplies the section heading; an H1 or H2 in your output would split "
                 "the surrounding note. Use H3 ('### ') or bold prose for any internal structure."
@@ -186,7 +186,8 @@ def test_generate_weekly_synthesis_demotes_h1_and_h2_headings_in_model_output(tm
     assert "Body paragraph." in lines
 
 
-def test_generate_weekly_synthesis_returns_full_response_without_hard_truncation(tmp_path: Path) -> None:
+def test_generate_weekly_synthesis_enforces_125_percent_buffer(tmp_path: Path) -> None:
+    # 9-word response, word_limit=6 → enforcement at round(6*1.25)=8 words → truncated
     provider = RecordingProvider(response="Overview paragraph.\n\n- First theme with context\n- Second theme follows")
     service = GenerationService(
         config=make_app_config(tmp_path).llm,
@@ -196,7 +197,7 @@ def test_generate_weekly_synthesis_returns_full_response_without_hard_truncation
 
     synthesis = service.generate_weekly_synthesis("Earlier synthesis.", "**Summary:** First summary.\n", word_limit=6)
 
-    assert synthesis == "Overview paragraph.\n\n- First theme with context\n- Second theme follows"
+    assert synthesis == "Overview paragraph.\n\n- First theme with context\n- Second theme..."
 
 
 def test_generate_weekly_synthesis_fallback_rebuilds_from_all_weekly_summaries(tmp_path: Path) -> None:

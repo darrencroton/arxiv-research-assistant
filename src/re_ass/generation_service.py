@@ -111,7 +111,7 @@ class GenerationService:
                     "Prioritise synthesis over a paper-by-paper recap. Lead with the strongest cross-paper "
                     "thread; bring in a counterpoint where one exists. Prose, not bullets — use bullets only "
                     "when they genuinely improve readability. Keep the note quickly digestible, return markdown "
-                    f"only, and aim for around {word_limit} words.\n\n"
+                    f"only. You must write no more than {word_limit} words.\n\n"
                     "Output rules: return ONLY the body text. Do NOT include any '#' or '##' headings — the "
                     "calling note already supplies the section heading; an H1 or H2 in your output would split "
                     "the surrounding note. Use H3 ('### ') or bold prose for any internal structure."
@@ -124,7 +124,7 @@ class GenerationService:
             )
             cleaned = self._clean_weekly_synthesis(response)
             if cleaned:
-                return cleaned
+                return self._truncate_markdown_words(cleaned, limit=round(word_limit * 1.25))
         except GenerationError as error:
             LOGGER.warning("Weekly synthesis generation failed: %s", error)
 
