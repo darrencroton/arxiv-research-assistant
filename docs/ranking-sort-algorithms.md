@@ -4,7 +4,10 @@ A companion to `docs/ranking-alternatives.md`. The first document focused on
 *what to rank against* (embeddings, rubrics, LLMs). This one focuses on *how
 to order the candidates once the comparator exists*, taking ideas from
 classical sort algorithms and asking which of them, if any, make ranking in
-re-ass faster, more accurate, or more reproducible.
+re-ass faster, more accurate, or more reproducible. Section 6 then asks the
+same question of the two per-paper passes — glossary and tag generation —
+which share the "LLM does everything, app validates after the fact" shape
+that the ranker has.
 
 > **Note on sources.** I could not reach
 > `https://tools.simonwillison.net/sort-algorithms` from the sandboxed
@@ -516,7 +519,8 @@ phase 1 (low risk, reversible)
 ├── add EmbeddingScorer (priorities embedded once, cached by hash)
 ├── add `ranking.prefilter = "embedding" | "off"` config flag
 ├── R2: embedding prefilter → existing PaperRanker over top-K
-└── backtest harness over state/runs/*.json — confirm parity
+├── backtest harness over state/runs/*.json — confirm parity
+└── T1: reuse the embedder for science-tag selection (see §6)
 
 phase 2 (the real win)
 ├── R1: run-and-merge with LLM comparator at borders
@@ -535,3 +539,154 @@ The first two phases would give re-ass a ranker that is faster, cheaper,
 more reproducible, and meaningfully more robust than today's, with the
 LLM doing only the work it's actually good at — judging close calls,
 not assigning calibrated 0-100 scores to a hundred papers in one shot.
+
+---
+
+## 6. Beyond ranking: tags and glossary
+
+The per-paper pipeline runs two more LLM passes after the summary is
+generated: a **glossary** pass (`generate_glossary`,
+`build_glossary_prompt`, `validate_glossary_section`, and the
+preserve-last-candidate retry loop in `call_glossary_llm_with_retry`)
+and a **tag** pass (`generate_tags`, `build_tags_prompt`,
+`validate_tags_section`, `normalise_tags_section`, with
+`build_fallback_tags` as a regex-substring safety net). Both share the
+same architectural shape as the ranker today: one LLM call expected to
+satisfy strict format rules, with after-the-fact validation and a
+fallback when that fails. The question is whether any of the ideas in
+sections 2-5 apply to them, or whether the difference is in the noise.
+
+The honest answer: **half of one of the two passes is a genuine win;
+the rest is in the noise.**
+
+### 6.1 The tag pass is two tasks in one prompt
+
+`build_tags_prompt` asks the model for two hashtag lines:
+
+1. **Proper-noun line.** Up to 5 hashtags for telescopes, surveys,
+   datasets, missions, instruments, models, software, or named
+   catalogues mentioned in the summary. There is no authority list —
+   this is free-form named-entity extraction.
+2. **Science-keyword line.** Up to 5 hashtags chosen *only* from a
+   supplied keyword allowlist (parsed by `iter_keyword_tags`), with
+   `reject_unknown_science_tags=True` enforcing this in
+   `normalise_tags_section`. This is **multi-label classification
+   against a fixed taxonomy**.
+
+These two tasks have very different best tools:
+
+| Task | Best tool | Why |
+| --- | --- | --- |
+| Proper-noun extraction | LLM | Open-vocabulary, contextual, no taxonomy to score against |
+| Science-keyword selection | Embedding similarity | Closed taxonomy, every candidate is known in advance, paraphrase-tolerant |
+
+`build_fallback_tags` already implements a poor-man's version of the
+embedding approach: it strips non-alphanumerics from each allowlist tag
+and checks whether the words appear in the normalised summary. This
+misses every paraphrase ("supermassive black hole" vs `#SMBH`,
+"intracluster light" vs `#ICL`) and every synonym. Replacing the
+substring check with embedding cosine similarity is a strict upgrade
+on the same task.
+
+### T1. Embedding-based science-tag selection
+
+The natural application of doc-1's section 2b (and a small piece of R6)
+to the science half of the tag pass.
+
+**Shape.**
+
+1. At setup (or when the keyword file's hash changes), embed each
+   allowlist science tag once, treating the tag word(s) plus any
+   surrounding context heading as the text. Cache the embeddings.
+2. At paper time, embed the summary (or just the abstract +
+   subheadings) once.
+3. Score each allowlist tag by cosine similarity to the summary
+   embedding. Keep the top-5 above a floor.
+4. **Escalation (R6 applied locally):** if the top-5 are tightly
+   clustered (small gap to the 6th, 7th, …), pass that ambiguous slice
+   to the LLM as a *short* listwise prompt — "given this summary, pick
+   the best 5 of these 8 hashtags". Most papers won't trigger this.
+5. The proper-noun line is left exactly as it is today: small
+   dedicated LLM call, simple validation, no allowlist.
+
+**Why it's a real win, not noise.**
+
+- Local models are at their worst on "pick exactly from this list"
+  problems. The current
+  `reject_unknown_science_tags=True` + retry + repair + fallback stack
+  exists because they don't reliably obey allowlist constraints.
+  Embedding similarity *cannot* go off-allowlist by construction.
+- Paraphrase coverage strictly improves over `build_fallback_tags`.
+- The science-tag step becomes deterministic and reproducible across
+  runs.
+- The proper-noun half no longer shares its fate with the science
+  half — a flake in one doesn't lose the other.
+- Cost: zero recurring LLM tokens for the science half on easy papers;
+  a small contested-slice LLM call on hard ones.
+
+**What gets removed.**
+
+- `build_fallback_tags` and `_normalise_search_text` /
+  `_split_tag_words` (the regex-substring matcher it relies on).
+- `reject_unknown_science_tags=True` and the associated
+  "dropped science tags" path in `normalise_tags_section` — the
+  classifier can't produce off-list tags.
+- Most of `validate_tags_section` — structural validation of the
+  hashtag block remains useful, but allowlist enforcement is gone.
+- A retry attempt: the proper-noun call is short and rarely fails;
+  the science half doesn't go through the LLM at all on easy papers.
+
+**Cost / risk.** The embedding similarity tags depend on a
+representation that wasn't trained on the user's specific allowlist.
+Worth backtesting against the last few weeks of generated tags before
+flipping the default. Low-similarity-floor tuning is the main knob.
+
+### 6.2 The glossary pass — mostly noise
+
+The glossary task is fundamentally generative: identify which terms in
+*this specific summary* are specialised, then write a one-sentence
+definition. There is no external taxonomy to match against, no list
+to filter, no ordering to produce. Embedding similarity has nothing to
+compare *to*. Run-and-merge, quickselect, multi-pass radix — none of
+them have an obvious lever here. The task is one paper, ~5-12 short
+rows, single LLM call; `call_glossary_llm_with_retry`'s
+preserve-last-candidate pattern is already about as KISS as it gets.
+
+The one *adjacent* idea that would actually help is **persistent
+caching across papers**. Common acronyms (`SMBH`, `AGN`, `JWST`,
+`IllustrisTNG`, `SHARK`, `SHAM`, `HOD`) get re-defined for every
+paper. A cross-run glossary cache keyed by term — stored under
+`state/` next to the existing per-paper records — would let each new
+paper's LLM call write definitions only for genuinely new terms, with
+known terms looked up.
+
+This is a state-store optimisation, not a sort-algorithm idea, and
+borrows nothing from sections 2-5 except the spirit of "only spend
+tokens where signal is genuinely new". Worth it only if the glossary
+call ever becomes a noticeable slice of total summarisation time. For
+now: skip.
+
+### 6.3 Assessment
+
+The rubric used in section 4, applied to the per-paper passes:
+
+| Proposal | Quality | Speed | Robustness | Reproducibility | KISS | DRY |
+| --- | :---: | :---: | :---: | :---: | :---: | :---: |
+| Current tags (LLM + validation + regex fallback) | 3 | 3 | 2 | 2 | 3 | 3 |
+| **T1.** Embedding science tags + LLM proper nouns | **5** | **5** | **5** | **5** | 4 | **5** |
+| Current glossary (LLM + retry, preserve last candidate) | 4 | 4 | 4 | 4 | **5** | 4 |
+| Cross-run glossary cache | 4 | **5** | 4 | 4 | 3 | 3 |
+
+T1 scores high on DRY because it reuses exactly the embedder built for
+R2. The cross-run glossary cache scores lower on KISS / DRY because it
+introduces a new persistent artefact for marginal benefit — listed for
+completeness, not as a recommendation.
+
+### 6.4 Recommendation
+
+- **Adopt T1 in phase 1**, immediately after the R2 embedder lands. It
+  reuses the same scorer and removes more code than it adds.
+- **Leave glossary generation alone.** The methods in this document
+  don't apply to a fundamentally generative task. Revisit only if the
+  glossary call becomes a measurable cost; if it does, the right
+  intervention is a state-store cache, not a sort-algorithm idea.
