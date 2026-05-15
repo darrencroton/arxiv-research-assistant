@@ -38,7 +38,6 @@ class LlmConfig:
     base_url: str | None
     api_key_env: str | None
     env_file: Path | None
-    prompt_debug_file: Path
     download_timeout_seconds: int
     max_pdf_size_mb: int
     marker_timeout_seconds: int
@@ -339,10 +338,6 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
             _resolve_path(root, str(llm_data.get("env_file")))
             if _optional_stripped_string(llm_data.get("env_file"))
             else None
-        ),
-        prompt_debug_file=_resolve_path(
-            root,
-            str(llm_data.get("prompt_debug_file", "logs/debug/paper_summariser/prompt.txt")),
         ),
         download_timeout_seconds=_positive_int(llm_data, "download_timeout_seconds", "llm", default=120),
         max_pdf_size_mb=_positive_int(llm_data, "max_pdf_size_mb", "llm", default=100),

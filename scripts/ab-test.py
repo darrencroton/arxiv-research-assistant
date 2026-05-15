@@ -51,13 +51,10 @@ STEP-BY-STEP
            appending.
       [state] root  -> append "-<name>"
       [logs]  root  -> append "-<name>"
-      [llm] / [paper_summariser] prompt_debug_file
-        -> "logs/debug/..." becomes "logs-<name>/debug/..."
 
     The [llm] mode/provider/model/effort fields are left identical to the
     benchmark so a diff between settings.toml and settings-<name>.toml shows
-    exactly the variable under test (only prompt_debug_file inside [llm] is
-    suffixed, since it's a path).
+    exactly the variable under test.
 
     AFTER setup, edit user_preferences/settings-<name>.toml [llm] to point at
     your candidate provider/model and any runtime limits that differ from the
@@ -215,9 +212,6 @@ SETUP_RULES: dict[tuple[str, str], str] = {
     ("output", "pdfs_dir"): "append",
     ("state", "root"): "append",
     ("logs", "root"): "append",
-    ("llm", "prompt_debug_file"): "logs_debug_prefix",
-    # The defaults file puts prompt_debug_file under [paper_summariser]; cover both.
-    ("paper_summariser", "prompt_debug_file"): "logs_debug_prefix",
 }
 
 # At least one of these (section, key) entries must be successfully rewritten;
@@ -310,11 +304,6 @@ def _apply_rule(rule: str, value: str, name: str) -> str:
         stripped = value.rstrip("/")
         suffix = value[len(stripped):]  # "" or "/"
         return f"{stripped}-{name}{suffix}"
-    if rule == "logs_debug_prefix":
-        if value.startswith("logs/debug/"):
-            return f"logs-{name}/debug/" + value[len("logs/debug/"):]
-        # absolute or non-standard prefix; leave as-is and let the user handle it
-        return value
     return value
 
 

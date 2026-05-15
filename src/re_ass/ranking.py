@@ -13,6 +13,7 @@ from re_ass.llm_retry import is_retryable_llm_error
 from re_ass.models import ArxivPaper, PreferenceConfig
 from re_ass.paper_identity import derive_identity
 from re_ass.paper_summariser.providers.base import Provider
+from re_ass.prompt_logger import PromptLogger
 from re_ass.settings import LlmConfig
 
 
@@ -424,12 +425,14 @@ class PaperRanker:
         always_summarize_score: float,
         min_selection_score: float,
         batch_size: int = 0,
+        prompt_logger: PromptLogger | None = None,
     ) -> None:
         self.provider = provider
         self.config = config
         self.always_summarize_score = always_summarize_score
         self.min_selection_score = min_selection_score
         self.batch_size = max(0, batch_size)
+        self.prompt_logger = prompt_logger
 
     def rank_papers(
         self,
@@ -458,7 +461,8 @@ class PaperRanker:
         for batch_index, batch in enumerate(batches, 1):
             if len(batches) > 1:
                 LOGGER.info("Ranking batch %s/%s (%s candidate(s)).", batch_index, len(batches), len(batch))
-            batch_ranked = self._rank_candidates_batch(preferences, batch)
+            batch_label = "ranking" if len(batches) == 1 else f"ranking-{batch_index:02d}"
+            batch_ranked = self._rank_candidates_batch(preferences, batch, label=batch_label)
             if dual_match_required:
                 for r in batch_ranked:
                     if (r.science_match is False or r.method_match is False) and r.score > 69.0:
@@ -485,7 +489,7 @@ class PaperRanker:
                     len(batches),
                 )
                 try:
-                    re_ranked = self._rank_candidates_batch(preferences, finalist_papers)
+                    re_ranked = self._rank_candidates_batch(preferences, finalist_papers, label="ranking-finalist")
                     if dual_match_required:
                         re_ranked = _apply_dual_match_cap(re_ranked)
                     re_ranked_by_key = {r.paper_key: r for r in re_ranked}
@@ -539,9 +543,10 @@ class PaperRanker:
         self,
         preferences: PreferenceConfig,
         candidates: list[ArxivPaper],
+        label: str = "ranking",
     ) -> list[RankedPaper]:
         dual_match_required = _requires_dual_match(preferences)
-        response = self._request_ranking_response(preferences, candidates)
+        response = self._request_ranking_response(preferences, candidates, label=label)
         try:
             return _parse_ranked_payload(
                 response,
@@ -555,6 +560,7 @@ class PaperRanker:
                 candidates,
                 invalid_response=response,
                 validation_error=str(error),
+                label=f"{label}-repair",
             )
             try:
                 return _parse_ranked_payload(
@@ -571,9 +577,12 @@ class PaperRanker:
         self,
         preferences: PreferenceConfig,
         candidates: list[ArxivPaper],
+        label: str = "ranking",
     ) -> str:
         system_prompt = _ranking_system_prompt()
         user_prompt = _ranking_user_prompt(preferences, candidates)
+        if self.prompt_logger:
+            self.prompt_logger.write(label, system_prompt, user_prompt)
         max_attempts = min(2, max(1, self.config.retry_attempts))
         last_error: Exception | None = None
 
@@ -609,6 +618,7 @@ class PaperRanker:
         *,
         invalid_response: str,
         validation_error: str,
+        label: str = "ranking-repair",
     ) -> str:
         system_prompt = _ranking_repair_system_prompt()
         user_prompt = _ranking_repair_user_prompt(
@@ -617,6 +627,8 @@ class PaperRanker:
             invalid_response=invalid_response,
             validation_error=validation_error,
         )
+        if self.prompt_logger:
+            self.prompt_logger.write(label, system_prompt, user_prompt)
         try:
             return self.provider.process_document(
                 content="",

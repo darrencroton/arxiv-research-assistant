@@ -103,8 +103,7 @@ def test_setup_is_provider_agnostic_for_local_variant(tmp_path: Path, monkeypatc
         'provider = "copilot"\n'
         'model = "claude-sonnet-4.6"\n'
         'effort = "high"\n'
-        "timeout_seconds = 1200\n"
-        'prompt_debug_file = "tmp/paper_summariser/prompt.txt"\n',
+        "timeout_seconds = 1200\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(ab_test, "REPO_ROOT", tmp_path)

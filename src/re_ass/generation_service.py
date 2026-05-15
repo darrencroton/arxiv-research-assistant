@@ -11,6 +11,7 @@ from re_ass.paper_summariser import PaperSummariser, PaperSummariserError
 from re_ass.paper_summariser.providers import create_provider
 from re_ass.paper_summariser.providers.base import Provider
 from re_ass.paper_summariser.service import download_arxiv_pdf
+from re_ass.prompt_logger import PromptLogger
 from re_ass.settings import LlmConfig
 
 
@@ -41,8 +42,10 @@ class GenerationService:
         tag_categories: tuple[str, ...] | None = None,
         provider: Provider | None = None,
         paper_summariser: PaperSummariser | None = None,
+        prompt_logger: PromptLogger | None = None,
     ) -> None:
         self.config = config
+        self.prompt_logger = prompt_logger
         self.provider = provider or create_provider(
             self.config.mode,
             self.config.provider,
@@ -55,10 +58,15 @@ class GenerationService:
         if paper_summariser is None:
             if not tag_categories:
                 raise ValueError("Tag categories are required when creating the default paper summariser.")
+            write_prompt_fn = (
+                (lambda lbl, sys, usr: prompt_logger.write(lbl, sys, usr))
+                if prompt_logger else None
+            )
             paper_summariser = PaperSummariser(
                 provider=self.provider,
                 config=self.config,
                 tag_categories=tag_categories,
+                write_prompt_fn=write_prompt_fn,
             )
         self.paper_summariser = paper_summariser
 
@@ -69,6 +77,7 @@ class GenerationService:
                 "Summarise the following arXiv abstract in 1-2 sentences. Return plain text only.",
                 f"Title: {paper.title}\nAbstract: {paper.summary}",
                 max_tokens=min(self.config.max_output_tokens, 512),
+                label="micro-summary",
             )
             cleaned = self._clean_text(response)
             if cleaned:
@@ -121,6 +130,7 @@ class GenerationService:
                     f"Weekly paper additions so far:\n{weekly_additions or '(none)'}"
                 ),
                 max_tokens=min(self.config.max_output_tokens, max_tokens),
+                label="weekly-synthesis",
             )
             cleaned = self._clean_weekly_synthesis(response)
             if cleaned:
@@ -130,7 +140,9 @@ class GenerationService:
 
         return self._fallback_weekly_synthesis(existing_synthesis, weekly_additions, word_limit=word_limit)
 
-    def _run_text_prompt(self, system_prompt: str, user_prompt: str, *, max_tokens: int) -> str:
+    def _run_text_prompt(self, system_prompt: str, user_prompt: str, *, max_tokens: int, label: str = "prompt") -> str:
+        if self.prompt_logger:
+            self.prompt_logger.write(label, system_prompt, user_prompt)
         try:
             return self.provider.process_document(
                 content="",

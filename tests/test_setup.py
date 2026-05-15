@@ -56,7 +56,7 @@ def test_prepare_workspace_warns_instead_of_failing_for_fresh_default_provider(t
         "state/papers",
         "state/runs",
         "logs",
-        "logs/debug/paper_summariser",
+        "logs/debug",
         "logs/launchd",
     ):
         assert (tmp_path / relative_path).exists()

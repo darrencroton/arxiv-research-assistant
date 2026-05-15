@@ -214,12 +214,14 @@ class PaperSummariser:
         tag_categories: tuple[str, ...],
         downloader: callable | None = None,
         input_reader: callable | None = None,
+        write_prompt_fn: Callable[[str, str, str], None] | None = None,
     ) -> None:
         self.provider = provider
         self.config = config
         self.tag_categories = tag_categories
         self.downloader = downloader or (lambda paper, destination_dir: download_arxiv_pdf(paper, destination_dir, config))
         self.input_reader = input_reader or read_input_file
+        self.write_prompt_fn = write_prompt_fn
 
     def summarise_paper(self, paper: ArxivPaper) -> GeneratedPaperSummary:
         with tempfile.TemporaryDirectory(prefix="re-ass-paper-") as temp_dir_name:
@@ -267,7 +269,8 @@ class PaperSummariser:
             source_metadata=source_metadata,
             worked_example=project_knowledge.summary_worked_example,
         )
-        write_debug_prompt(self.config.prompt_debug_file, system_prompt, user_prompt)
+        if self.write_prompt_fn:
+            self.write_prompt_fn("paper-summary", system_prompt, user_prompt)
 
         summary = call_llm_with_retry(
             self.provider,
@@ -281,11 +284,13 @@ class PaperSummariser:
         summary = strip_preamble(summary)
         validate_summary(summary)
 
+        write_fn = self.write_prompt_fn
         tags_section = generate_tags(
             summary,
             filtered_keywords,
             self.provider,
             config=self.config,
+            write_prompt_fn=(lambda s, u: write_fn("paper-tags", s, u)) if write_fn else None,
         )
         glossary_section = ""
         if has_markdown_section(summary, "## Glossary"):
@@ -295,6 +300,7 @@ class PaperSummariser:
                 summary,
                 self.provider,
                 config=self.config,
+                write_prompt_fn=(lambda s, u: write_fn("paper-glossary", s, u)) if write_fn else None,
             )
         if glossary_section:
             summary = insert_section(summary, glossary_section)
@@ -818,16 +824,6 @@ def create_user_prompt(
     )
 
 
-def write_debug_prompt(prompt_path: Path, system_prompt: str, user_prompt: str) -> None:
-    try:
-        prompt_path.parent.mkdir(parents=True, exist_ok=True)
-        full_prompt = f"SYSTEM PROMPT\n{system_prompt}\n\n---\n\nUSER PROMPT\n{user_prompt}"
-        prompt_path.write_text(full_prompt, encoding="utf-8")
-        LOGGER.info("Debug prompt written to %s", prompt_path)
-    except Exception as error:  # pragma: no cover - debug-path best effort
-        LOGGER.warning("Could not write debug prompt file: %s", error)
-
-
 def call_llm_with_retry(
     provider: Provider,
     content: bytes | str,
@@ -1157,9 +1153,17 @@ def build_tags_prompt(summary_text: str, keywords: str) -> tuple[str, str]:
     return system_prompt, user_prompt
 
 
-def generate_glossary(summary_text: str, provider: Provider, *, config: LlmConfig) -> str:
+def generate_glossary(
+    summary_text: str,
+    provider: Provider,
+    *,
+    config: LlmConfig,
+    write_prompt_fn: Callable[[str, str], None] | None = None,
+) -> str:
     """Generate and validate a glossary section from the completed summary."""
     system_prompt, user_prompt = build_glossary_prompt(summary_text)
+    if write_prompt_fn:
+        write_prompt_fn(system_prompt, user_prompt)
     try:
         return call_glossary_llm_with_retry(
             provider,
@@ -1173,9 +1177,18 @@ def generate_glossary(summary_text: str, provider: Provider, *, config: LlmConfi
         return ""
 
 
-def generate_tags(summary_text: str, keywords: str, provider: Provider, *, config: LlmConfig) -> str:
+def generate_tags(
+    summary_text: str,
+    keywords: str,
+    provider: Provider,
+    *,
+    config: LlmConfig,
+    write_prompt_fn: Callable[[str, str], None] | None = None,
+) -> str:
     """Generate a best-effort tags section from the completed summary."""
     system_prompt, user_prompt = build_tags_prompt(summary_text, keywords)
+    if write_prompt_fn:
+        write_prompt_fn(system_prompt, user_prompt)
     try:
         section = call_llm_with_retry(
             provider,

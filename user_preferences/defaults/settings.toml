@@ -53,7 +53,6 @@ retry_attempts = 3
 base_url = ""
 api_key_env = ""
 env_file = ""
-prompt_debug_file = "logs/debug/paper_summariser/prompt.txt"
 download_timeout_seconds = 120
 max_pdf_size_mb = 100
 marker_timeout_seconds = 300

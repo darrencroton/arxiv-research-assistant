@@ -13,6 +13,7 @@ from re_ass.models import ArxivPaper, ProcessedPaper
 from re_ass.note_manager import NoteManager
 from re_ass.paper_identity import PaperIdentity, derive_identity
 from re_ass.preferences import load_preferences
+from re_ass.prompt_logger import PromptLogger
 from re_ass.ranking import PaperRanker
 from re_ass.settings import AppConfig
 from re_ass.state_store import StateStore
@@ -379,6 +380,7 @@ def _run_announcement_day(
             always_summarize_score=config.always_summarize_score,
             min_selection_score=config.min_selection_score,
             batch_size=config.llm.ranking_batch_size,
+            prompt_logger=generation_service.prompt_logger,
         )
         selection = ranker.rank_papers(preferences, candidates)
         selected_papers = selection.selected_papers
@@ -513,9 +515,12 @@ def run(config: AppConfig, run_date: date | None = None, *, backfill: bool = Fal
             note_manager.rotate_weekly_note_if_needed(invocation_date)
 
         preferences = load_preferences(config.preferences_file)
+        prompt_logger = PromptLogger(config.logs_root / "debug")
+        prompt_logger.clear()
         generation_service = GenerationService(
             config=config.llm,
             tag_categories=preferences.categories,
+            prompt_logger=prompt_logger,
         )
         fetcher = ArxivFetcher(page_size=config.arxiv_page_size)
         available_dates = list(fetcher.available_announcement_dates(preferences.categories))

@@ -94,6 +94,7 @@ class FakeGenerationService:
         self.failing_titles = failing_titles or set()
         self.note_content_by_title = note_content_by_title or {}
         self.provider = object()
+        self.prompt_logger = None
         self.weekly_synthesis_calls: list[dict[str, object]] = []
 
     def generate_micro_summary(self, paper):

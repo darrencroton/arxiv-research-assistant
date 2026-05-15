@@ -20,7 +20,7 @@ _RUNTIME_DIRECTORIES = (
     Path("state/papers"),
     Path("state/runs"),
     Path("logs"),
-    Path("logs/debug/paper_summariser"),
+    Path("logs/debug"),
     Path("logs/launchd"),
 )
 

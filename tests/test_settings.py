@@ -32,7 +32,6 @@ def test_load_config_parses_explicit_llm_provider_settings(tmp_path: Path) -> No
         "max_prompt_chars = 500000\n"
         "temperature = 0.1\n"
         "retry_attempts = 4\n"
-        "prompt_debug_file = 'archive/prompts/last.txt'\n"
         "download_timeout_seconds = 45\n"
         "max_pdf_size_mb = 20\n"
         "marker_timeout_seconds = 180\n",
@@ -49,9 +48,6 @@ def test_load_config_parses_explicit_llm_provider_settings(tmp_path: Path) -> No
     assert config.min_selection_score == 82.5
     assert config.llm.max_prompt_chars == 500000
     assert config.llm.provider_config()["max_prompt_chars"] == 500000
-    assert config.llm.prompt_debug_file == (tmp_path / "archive" / "prompts" / "last.txt").resolve()
-
-
 def test_load_config_parses_llm_effort_for_cli_provider(tmp_path: Path) -> None:
     config_path = tmp_path / "settings.toml"
     config_path.write_text(
@@ -138,7 +134,6 @@ def test_load_config_uses_new_runtime_sections(tmp_path: Path) -> None:
     assert config.weekly_synthesis_word_limit_end == 200
     assert config.shift_announcements_to_next_weekday is True
     assert config.llm.effort is None
-    assert config.llm.prompt_debug_file == (tmp_path / "logs" / "debug" / "paper_summariser" / "prompt.txt").resolve()
 
 
 def test_load_config_treats_blank_llm_effort_as_unset(tmp_path: Path) -> None:
