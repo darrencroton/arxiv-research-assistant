@@ -143,7 +143,7 @@ def _ranking_user_prompt(preferences: PreferenceConfig, candidates: list[ArxivPa
             "- science_match is true only if the paper clearly matches at least one science priority.\n"
             "- method_match is true only if the paper clearly matches at least one method priority.\n"
             "- More matches are better, but one direct science match plus one direct method match can still be a strong fit.\n"
-            "- Earlier numbers within each section matter more than later ones.\n"
+            "- Earlier numbers within each priority matter more than later ones.\n"
             "- Score fit to the user's priorities, not general paper quality.\n"
         )
         scoring_guide = (
