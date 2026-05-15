@@ -14,7 +14,7 @@ from re_ass.note_manager import NoteManager
 from re_ass.paper_identity import PaperIdentity, derive_identity
 from re_ass.preferences import load_preferences
 from re_ass.prompt_logger import PromptLogger
-from re_ass.ranking import PaperRanker
+from re_ass.ranking import PaperRanker, RankingError
 from re_ass.settings import AppConfig
 from re_ass.state_store import StateStore
 
@@ -492,6 +492,17 @@ def _run_announcement_day(
         state_store.save_run_summary(run_summary, label=f"announcement-{announcement_date.isoformat()}")
         state_store.save_completed_announcement_date(announcement_date)
         return 0
+    except RankingError as error:
+        LOGGER.error(
+            "Ranking failed for announcement date %s: %s",
+            announcement_date.isoformat(),
+            error,
+        )
+        run_summary["fatal_error"] = str(error)
+        run_summary["failed_papers"] = len(run_summary["failed_keys"])
+        run_summary["completed_papers"] = len(run_summary["completed_keys"])
+        state_store.save_run_summary(run_summary, label=f"announcement-{announcement_date.isoformat()}-fatal")
+        return 1
     except Exception as error:
         LOGGER.exception("Fatal pipeline error for announcement date %s", announcement_date.isoformat())
         run_summary["fatal_error"] = str(error)

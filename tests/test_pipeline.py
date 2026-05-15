@@ -8,6 +8,7 @@ from re_ass.note_manager import NoteManager
 from re_ass.paper_identity import extract_source_id
 from re_ass.pipeline import run
 from re_ass.paper_identity import derive_identity
+from re_ass.ranking import RankingError
 from tests.support import make_app_config, make_paper
 
 
@@ -143,6 +144,14 @@ class FakeRanker:
         )
 
 
+class FailingRanker:
+    def __init__(self, **_kwargs) -> None:
+        pass
+
+    def rank_papers(self, _preferences, _candidates):
+        raise RankingError("ranking payload remained invalid")
+
+
 def _preferences() -> PreferenceConfig:
     return PreferenceConfig(priorities=("Example priority",), categories=("astro-ph.GA",))
 
@@ -199,6 +208,24 @@ def test_pipeline_fails_hard_when_provider_construction_fails(tmp_path: Path, mo
     assert not any(config.summaries_dir.glob("*.md"))
     run_summary = next(config.state_runs_dir.glob("*.json")).read_text(encoding="utf-8")
     assert "provider missing" in run_summary
+
+
+def test_pipeline_records_ranking_failure_without_unhandled_crash(tmp_path: Path, monkeypatch) -> None:
+    config = make_app_config(tmp_path)
+    paper = make_paper(arxiv_id="2603.30003", title="Unranked Paper")
+    monkeypatch.setattr("re_ass.pipeline.ArxivFetcher", lambda **_kwargs: FakeFetcher([paper], available_dates=[date(2026, 3, 24)]))
+    monkeypatch.setattr("re_ass.pipeline.PaperRanker", lambda **kwargs: FailingRanker(**kwargs))
+    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: _preferences())
+    monkeypatch.setattr("re_ass.pipeline.GenerationService", lambda **_kwargs: FakeGenerationService())
+
+    exit_code = run(config, date(2026, 3, 24))
+
+    assert exit_code == 1
+    run_summaries = list(config.state_runs_dir.glob("*fatal*.json"))
+    assert len(run_summaries) == 1
+    summary_text = run_summaries[0].read_text(encoding="utf-8")
+    assert '"fatal_error": "ranking payload remained invalid"' in summary_text
+    assert '"candidate_count": 1' in summary_text
 
 
 def test_pipeline_writes_verbatim_summariser_note_output(tmp_path: Path, monkeypatch) -> None:
@@ -671,5 +698,3 @@ def test_pipeline_records_announcement_and_ranking_diagnostics(tmp_path: Path, m
     assert '"ranking_results"' in summary_text
     assert '"selected_results"' in summary_text
     assert '"weekly_interest_results"' in summary_text
-
-

@@ -82,6 +82,8 @@ def test_ranker_uses_ordered_priorities_and_compact_candidate_payload(tmp_path) 
     assert "Semantic Agents" in prompt
     assert "Agentic workflows for tool use." in prompt
     assert "Author One" not in prompt
+    assert '"candidate_id":"C001"' in prompt
+    assert "arxiv:2603.40011" not in prompt
     assert "Matching multiple priorities is a bonus, not a requirement." in prompt
 
 
@@ -369,9 +371,9 @@ def test_ranker_repairs_invalid_payload_once(tmp_path) -> None:
     assert "validation_error" in provider.calls[1]["user_prompt"]
 
 
-def test_ranker_fills_missing_papers_with_score_zero(tmp_path) -> None:
+def test_ranker_retries_missing_papers_instead_of_filling_score_zero(tmp_path) -> None:
     paper = make_paper(arxiv_id="2603.40051", title="Only Paper")
-    provider = RecordingProvider([json.dumps({"ranked_papers": []})])
+    provider = RecordingProvider([json.dumps({"ranked_papers": []}) for _ in range(6)])
     ranker = PaperRanker(
         provider=provider,
         config=make_app_config(tmp_path).llm,
@@ -379,13 +381,10 @@ def test_ranker_fills_missing_papers_with_score_zero(tmp_path) -> None:
         min_selection_score=80.0,
     )
 
-    selection = ranker.rank_papers(_preferences("Agents"), [paper])
+    with pytest.raises(RankingError, match="omitted candidate_id"):
+        ranker.rank_papers(_preferences("Agents"), [paper])
 
-    assert selection.selected_papers == []
-    assert len(selection.ranked) == 1
-    assert selection.ranked[0].score == 0.0
-    assert selection.ranked[0].score_filled is True
-    assert len(provider.calls) == 1
+    assert len(provider.calls) == 6
 
 
 def test_split_into_batches_single_batch_within_overflow_tolerance() -> None:
@@ -566,7 +565,7 @@ def test_ranker_keeps_finalist_rerank_capped_papers_in_weekly_interest(tmp_path)
     assert selection.weekly_interest[0].score == 69.0
 
 
-def test_ranker_requires_full_ranked_list_after_repair(tmp_path) -> None:
+def test_ranker_retries_invalid_payloads_before_failing(tmp_path) -> None:
     papers = [
         make_paper(arxiv_id="2603.40051", title="Paper A"),
         make_paper(arxiv_id="2603.40052", title="Paper B"),
@@ -580,15 +579,8 @@ def test_ranker_requires_full_ranked_list_after_repair(tmp_path) -> None:
                         {"candidate_id": "arxiv:2603.40052", "score": 75, "rationale": "Known id."},
                     ]
                 }
-            ),
-            json.dumps(
-                {
-                    "ranked_papers": [
-                        {"candidate_id": "arxiv:2603.49999", "score": 97, "rationale": "Still bad id."},
-                        {"candidate_id": "arxiv:2603.40052", "score": 75, "rationale": "Known id."},
-                    ]
-                }
-            ),
+            )
+            for _ in range(6)
         ]
     )
     ranker = PaperRanker(
@@ -598,9 +590,50 @@ def test_ranker_requires_full_ranked_list_after_repair(tmp_path) -> None:
         min_selection_score=80.0,
     )
 
-    with pytest.raises(RankingError, match="remained invalid after repair attempt"):
+    with pytest.raises(RankingError, match="remained invalid after 6 validation attempts"):
         ranker.rank_papers(_preferences("Agents"), papers)
-    assert len(provider.calls) == 2
+    assert len(provider.calls) == 6
+
+
+def test_ranker_splits_large_invalid_batch_without_dropping_papers(tmp_path) -> None:
+    papers = [
+        make_paper(arxiv_id=f"2603.{40100 + i}", title=f"Paper {i:02d}")
+        for i in range(20)
+    ]
+    invalid_full_batch = json.dumps(
+        {
+            "ranked_papers": [
+                {"candidate_id": "C999", "score": 97, "rationale": "Invalid local id."}
+            ]
+        }
+    )
+    valid_half_batch = json.dumps(
+        {
+            "ranked_papers": [
+                {"candidate_id": f"C{i:03d}", "score": 60 - i, "rationale": "Recovered ranking."}
+                for i in range(1, 11)
+            ]
+        }
+    )
+    provider = RecordingProvider(
+        [invalid_full_batch for _ in range(6)]
+        + [valid_half_batch, valid_half_batch]
+    )
+    ranker = PaperRanker(
+        provider=provider,
+        config=make_app_config(tmp_path).llm,
+        always_summarize_score=90.0,
+        min_selection_score=70.0,
+    )
+
+    selection = ranker.rank_papers(_preferences("Agents"), papers)
+
+    assert len(provider.calls) == 8
+    assert len(selection.ranked) == 20
+    assert {item.paper_key for item in selection.ranked} == {
+        f"arxiv:2603.{40100 + i}" for i in range(20)
+    }
+    assert not any(item.score_filled for item in selection.ranked)
 
 
 def test_ranker_retries_once_after_retryable_provider_failure(tmp_path, monkeypatch) -> None:

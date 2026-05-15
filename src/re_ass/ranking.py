@@ -19,6 +19,8 @@ from re_ass.settings import LlmConfig
 
 LOGGER = logging.getLogger(__name__)
 _RANKING_RETRY_WAIT_SECONDS = 2
+_MIN_RANKING_VALIDATION_ATTEMPTS = 4
+_MIN_RECOVERY_BATCH_SIZE = 10
 # When no paper clears always_summarize_score, take this many from the top of the
 # above-min_selection_score pool so the daily note is never silently blank.
 _ABOVE_MIN_FILL_COUNT = 1
@@ -26,6 +28,10 @@ _ABOVE_MIN_FILL_COUNT = 1
 
 class RankingError(RuntimeError):
     """Raised when paper ranking cannot be completed."""
+
+
+class RankingPayloadError(RankingError):
+    """Raised when a ranking response is structurally invalid."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,11 +55,26 @@ class RankingSelection:
     weekly_interest: list[RankedPaper]
 
 
-def _candidate_records(candidates: list[ArxivPaper]) -> list[tuple[ArxivPaper, str, str]]:
-    records: list[tuple[ArxivPaper, str, str]] = []
-    for paper in candidates:
+@dataclass(frozen=True, slots=True)
+class _CandidateRecord:
+    paper: ArxivPaper
+    local_id: str
+    paper_key: str
+    source_id: str
+
+
+def _candidate_records(candidates: list[ArxivPaper]) -> list[_CandidateRecord]:
+    records: list[_CandidateRecord] = []
+    for index, paper in enumerate(candidates, 1):
         identity = derive_identity(paper)
-        records.append((paper, identity.paper_key, identity.source_id))
+        records.append(
+            _CandidateRecord(
+                paper=paper,
+                local_id=f"C{index:03d}",
+                paper_key=identity.paper_key,
+                source_id=identity.source_id,
+            )
+        )
     return records
 
 
@@ -114,21 +135,21 @@ def _ranking_system_prompt() -> str:
 def _ranking_response_shape(*, dual_match: bool) -> str:
     if dual_match:
         return (
-            '{"ranked_papers":[{"candidate_id":"arxiv:0000.00000","score":97,'
+            '{"ranked_papers":[{"candidate_id":"C001","score":97,'
             '"science_match":true,"method_match":true,"rationale":"short reason"}]}'
         )
-    return '{"ranked_papers":[{"candidate_id":"arxiv:0000.00000","score":97,"rationale":"short reason"}]}'
+    return '{"ranked_papers":[{"candidate_id":"C001","score":97,"rationale":"short reason"}]}'
 
 
 def _ranking_user_prompt(preferences: PreferenceConfig, candidates: list[ArxivPaper]) -> str:
     payload = [
         {
-            "candidate_id": paper_key,
-            "title": paper.title,
-            "abstract": paper.summary,
-            "primary_category": paper.primary_category,
+            "candidate_id": record.local_id,
+            "title": record.paper.title,
+            "abstract": record.paper.summary,
+            "primary_category": record.paper.primary_category,
         }
-        for paper, paper_key, _source_id in _candidate_records(candidates)
+        for record in _candidate_records(candidates)
     ]
     dual_match = _requires_dual_match(preferences)
     response_shape = _ranking_response_shape(dual_match=dual_match)
@@ -136,7 +157,7 @@ def _ranking_user_prompt(preferences: PreferenceConfig, candidates: list[ArxivPa
         rules = (
             "- Rank every provided candidate exactly once.\n"
             "- Sort ranked_papers from highest score to lowest score.\n"
-            "- Use only the provided candidate IDs.\n"
+            "- Use only the short local candidate IDs provided in candidates_json, such as C001.\n"
             "- score must be a number from 0 to 100.\n"
             "- science_match and method_match must be boolean values.\n"
             "- rationale must be one sentence and under 30 words.\n"
@@ -156,7 +177,7 @@ def _ranking_user_prompt(preferences: PreferenceConfig, candidates: list[ArxivPa
         rules = (
             "- Rank every provided candidate exactly once.\n"
             "- Sort ranked_papers from highest score to lowest score.\n"
-            "- Use only the provided candidate IDs.\n"
+            "- Use only the short local candidate IDs provided in candidates_json, such as C001.\n"
             "- score must be a number from 0 to 100.\n"
             "- rationale must be one sentence and under 30 words.\n"
             "- Earlier priority numbers matter more than later ones.\n"
@@ -206,10 +227,10 @@ def _ranking_repair_user_prompt(
 ) -> str:
     allowed_candidates = [
         {
-            "candidate_id": paper_key,
-            "title": paper.title,
+            "candidate_id": record.local_id,
+            "title": record.paper.title,
         }
-        for paper, paper_key, _source_id in _candidate_records(candidates)
+        for record in _candidate_records(candidates)
     ]
     dual_match = _requires_dual_match(preferences)
     response_shape = _ranking_response_shape(dual_match=dual_match)
@@ -231,7 +252,8 @@ def _ranking_repair_user_prompt(
         "Rules:\n"
         "- Rank every provided candidate exactly once.\n"
         "- Sort ranked_papers from highest score to lowest score.\n"
-        "- Use only the provided candidate IDs.\n"
+        "- Use only the short local candidate IDs provided in allowed_candidates_json, such as C001.\n"
+        "- Remove or replace any candidate_id not present in allowed_candidates_json.\n"
         "- Preserve the previous ranking intent where possible.\n"
         f"{fit_rule}"
         f"{extra_rule}"
@@ -266,30 +288,41 @@ def _load_ranking_payload(response_text: str) -> dict[str, Any]:
     start = cleaned.find("{")
     end = cleaned.rfind("}")
     if start < 0 or end < start:
-        raise RankingError("Ranking provider did not return a JSON object.")
+        raise RankingPayloadError("Ranking provider did not return a JSON object.")
 
     try:
         payload = json.loads(cleaned[start : end + 1])
     except json.JSONDecodeError as error:
-        raise RankingError(f"Ranking provider returned invalid JSON: {error}") from error
+        raise RankingPayloadError(f"Ranking provider returned invalid JSON: {error}") from error
 
     if not isinstance(payload, dict):
-        raise RankingError("Ranking provider returned a non-object JSON payload.")
+        raise RankingPayloadError("Ranking provider returned a non-object JSON payload.")
     return payload
 
 
 def _ranked_entries_from_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
     ranked = payload.get("ranked_papers")
     if not isinstance(ranked, list):
-        raise RankingError("Ranking payload must contain a 'ranked_papers' list.")
+        raise RankingPayloadError("Ranking payload must contain a 'ranked_papers' list.")
     return ranked
 
 
-def _candidate_lookup(candidates: list[ArxivPaper]) -> dict[str, tuple[ArxivPaper, str]]:
-    return {
-        paper_key: (paper, source_id)
-        for paper, paper_key, source_id in _candidate_records(candidates)
-    }
+def _candidate_lookup(candidates: list[ArxivPaper]) -> dict[str, _CandidateRecord]:
+    lookup: dict[str, _CandidateRecord] = {}
+    for record in _candidate_records(candidates):
+        lookup[record.local_id] = record
+        # Accept canonical paper keys for compatibility with existing tests and
+        # older prompt logs, while current prompts expose only local IDs.
+        lookup[record.paper_key] = record
+    return lookup
+
+
+def _candidate_records_by_key(candidates: list[ArxivPaper]) -> dict[str, _CandidateRecord]:
+    return {record.paper_key: record for record in _candidate_records(candidates)}
+
+
+def _format_candidate_ids(records: list[_CandidateRecord]) -> str:
+    return ", ".join(f"{record.local_id} ({record.paper_key})" for record in records)
 
 
 def _parse_ranked_payload(
@@ -300,32 +333,34 @@ def _parse_ranked_payload(
 ) -> list[RankedPaper]:
     payload = _load_ranking_payload(response_text)
     raw_ranked = _ranked_entries_from_payload(payload)
-    by_key = _candidate_lookup(candidates)
+    by_candidate_id = _candidate_lookup(candidates)
+    by_paper_key = _candidate_records_by_key(candidates)
 
     ranked: list[tuple[int, RankedPaper]] = []
-    seen_ids: set[str] = set()
+    seen_keys: set[str] = set()
     for position, entry in enumerate(raw_ranked):
         if not isinstance(entry, dict):
-            raise RankingError("Each ranked paper entry must be a JSON object.")
+            raise RankingPayloadError("Each ranked paper entry must be a JSON object.")
 
         candidate_id = entry.get("candidate_id")
         if not isinstance(candidate_id, str):
-            raise RankingError("Each ranked paper entry must include a string candidate_id.")
-        if candidate_id in seen_ids:
-            raise RankingError(f"Ranking payload repeated candidate_id '{candidate_id}'.")
-        if candidate_id not in by_key:
-            raise RankingError(f"Ranking payload returned unknown candidate_id '{candidate_id}'.")
+            raise RankingPayloadError("Each ranked paper entry must include a string candidate_id.")
+        record = by_candidate_id.get(candidate_id)
+        if record is None:
+            raise RankingPayloadError(f"Ranking payload returned unknown candidate_id '{candidate_id}'.")
+        if record.paper_key in seen_keys:
+            raise RankingPayloadError(f"Ranking payload repeated candidate_id '{candidate_id}'.")
 
         score = entry.get("score")
         if not isinstance(score, (int, float)):
-            raise RankingError(f"Ranking payload for '{candidate_id}' is missing a numeric score.")
+            raise RankingPayloadError(f"Ranking payload for '{candidate_id}' is missing a numeric score.")
         numeric_score = float(score)
         if numeric_score < 0.0 or numeric_score > 100.0:
-            raise RankingError(f"Ranking payload for '{candidate_id}' has score {numeric_score}, outside 0-100.")
+            raise RankingPayloadError(f"Ranking payload for '{candidate_id}' has score {numeric_score}, outside 0-100.")
 
         rationale = entry.get("rationale")
         if not isinstance(rationale, str) or not rationale.strip():
-            raise RankingError(f"Ranking payload for '{candidate_id}' is missing a rationale.")
+            raise RankingPayloadError(f"Ranking payload for '{candidate_id}' is missing a rationale.")
 
         science_match: bool | None = None
         method_match: bool | None = None
@@ -333,18 +368,17 @@ def _parse_ranked_payload(
             science_match = entry.get("science_match")
             method_match = entry.get("method_match")
             if not isinstance(science_match, bool):
-                raise RankingError(f"Ranking payload for '{candidate_id}' is missing boolean science_match.")
+                raise RankingPayloadError(f"Ranking payload for '{candidate_id}' is missing boolean science_match.")
             if not isinstance(method_match, bool):
-                raise RankingError(f"Ranking payload for '{candidate_id}' is missing boolean method_match.")
+                raise RankingPayloadError(f"Ranking payload for '{candidate_id}' is missing boolean method_match.")
 
-        paper, source_id = by_key[candidate_id]
         ranked.append(
             (
                 position,
                 RankedPaper(
-                    paper=paper,
-                    paper_key=candidate_id,
-                    source_id=source_id,
+                    paper=record.paper,
+                    paper_key=record.paper_key,
+                    source_id=record.source_id,
                     score=numeric_score,
                     rationale=rationale.strip(),
                     science_match=science_match,
@@ -352,35 +386,15 @@ def _parse_ranked_payload(
                 ),
             )
         )
-        seen_ids.add(candidate_id)
+        seen_keys.add(record.paper_key)
 
-    missing_keys = set(by_key) - seen_ids
+    missing_keys = set(by_paper_key) - seen_keys
     if missing_keys:
-        LOGGER.warning(
-            "LLM returned %s of %s ranked papers; %s missing candidates filled with score 0.",
-            len(seen_ids),
-            len(by_key),
-            len(missing_keys),
+        missing_records = [by_paper_key[key] for key in sorted(missing_keys)]
+        raise RankingPayloadError(
+            "Ranking payload omitted candidate_id(s): "
+            f"{_format_candidate_ids(missing_records)}."
         )
-        fill_position = len(raw_ranked)
-        for missing_key in sorted(missing_keys):
-            paper, source_id = by_key[missing_key]
-            ranked.append(
-                (
-                    fill_position,
-                    RankedPaper(
-                        paper=paper,
-                        paper_key=missing_key,
-                        source_id=source_id,
-                        score=0.0,
-                        rationale="not ranked",
-                        science_match=False if require_dual_match else None,
-                        method_match=False if require_dual_match else None,
-                        score_filled=True,
-                    ),
-                )
-            )
-            fill_position += 1
 
     ranked.sort(key=lambda item: (-item[1].score, item[0], item[1].paper.title.casefold()))
     return [item for _position, item in ranked]
@@ -412,6 +426,11 @@ def _split_into_batches(candidates: list[ArxivPaper], batch_size: int) -> list[l
         batches.append(candidates[start : start + size])
         start += size
     return batches
+
+
+def _split_for_recovery(candidates: list[ArxivPaper]) -> list[list[ArxivPaper]]:
+    midpoint = (len(candidates) + 1) // 2
+    return [candidates[:midpoint], candidates[midpoint:]]
 
 
 class PaperRanker:
@@ -489,7 +508,12 @@ class PaperRanker:
                     len(batches),
                 )
                 try:
-                    re_ranked = self._rank_candidates_batch(preferences, finalist_papers, label="ranking-finalist")
+                    re_ranked = self._rank_candidates_batch(
+                        preferences,
+                        finalist_papers,
+                        label="ranking-finalist",
+                        allow_split_recovery=False,
+                    )
                     if dual_match_required:
                         for r in re_ranked:
                             if (r.science_match is False or r.method_match is False) and r.score > 69.0:
@@ -547,34 +571,87 @@ class PaperRanker:
         preferences: PreferenceConfig,
         candidates: list[ArxivPaper],
         label: str = "ranking",
+        *,
+        allow_split_recovery: bool = True,
+    ) -> list[RankedPaper]:
+        try:
+            return self._rank_candidates_batch_once(preferences, candidates, label=label)
+        except RankingPayloadError:
+            if not allow_split_recovery or len(candidates) < _MIN_RECOVERY_BATCH_SIZE * 2:
+                raise
+
+            batches = _split_for_recovery(candidates)
+            if any(len(batch) < _MIN_RECOVERY_BATCH_SIZE for batch in batches):
+                raise
+
+            LOGGER.warning(
+                "Ranking batch '%s' remained invalid after retries; splitting %s candidate(s) into %s recovery batches of size %s.",
+                label,
+                len(candidates),
+                len(batches),
+                ", ".join(str(len(batch)) for batch in batches),
+            )
+            ranked: list[RankedPaper] = []
+            for batch_index, batch in enumerate(batches, 1):
+                ranked.extend(
+                    self._rank_candidates_batch(
+                        preferences,
+                        batch,
+                        label=f"{label}-split-{batch_index:02d}",
+                        allow_split_recovery=True,
+                    )
+                )
+            return ranked
+
+    def _rank_candidates_batch_once(
+        self,
+        preferences: PreferenceConfig,
+        candidates: list[ArxivPaper],
+        label: str,
     ) -> list[RankedPaper]:
         dual_match_required = _requires_dual_match(preferences)
-        response = self._request_ranking_response(preferences, candidates, label=label)
-        try:
-            return _parse_ranked_payload(
-                response,
-                candidates,
-                require_dual_match=dual_match_required,
-            )
-        except RankingError as error:
-            LOGGER.warning("Ranking payload validation failed; retrying once: %s", error)
-            repair_response = self._repair_ranking_payload(
-                preferences,
-                candidates,
-                invalid_response=response,
-                validation_error=str(error),
-                label=f"{label}-repair",
-            )
+        validation_attempts = max(
+            _MIN_RANKING_VALIDATION_ATTEMPTS,
+            max(1, self.config.retry_attempts) * 2,
+        )
+        response = ""
+        validation_error: RankingPayloadError | None = None
+
+        for attempt in range(1, validation_attempts + 1):
+            if attempt == 1 or attempt % 2 == 1:
+                request_label = label if attempt == 1 else f"{label}-retry-{attempt:02d}"
+                response = self._request_ranking_response(preferences, candidates, label=request_label)
+            else:
+                request_label = f"{label}-repair-{attempt:02d}"
+                response = self._repair_ranking_payload(
+                    preferences,
+                    candidates,
+                    invalid_response=response,
+                    validation_error=str(validation_error),
+                    label=request_label,
+                )
+
             try:
                 return _parse_ranked_payload(
-                    repair_response,
+                    response,
                     candidates,
                     require_dual_match=dual_match_required,
                 )
-            except RankingError as repair_error:
-                raise RankingError(
-                    f"Ranking payload remained invalid after repair attempt: {repair_error}"
-                ) from repair_error
+            except RankingPayloadError as error:
+                validation_error = error
+                if attempt < validation_attempts:
+                    LOGGER.warning(
+                        "Ranking payload validation failed on attempt %s/%s for batch '%s'; retrying: %s",
+                        attempt,
+                        validation_attempts,
+                        label,
+                        error,
+                    )
+
+        raise RankingPayloadError(
+            f"Ranking payload remained invalid after {validation_attempts} validation attempts: "
+            f"{validation_error}"
+        ) from validation_error
 
     def _request_ranking_response(
         self,
@@ -586,7 +663,20 @@ class PaperRanker:
         user_prompt = _ranking_user_prompt(preferences, candidates)
         if self.prompt_logger:
             self.prompt_logger.write(label, system_prompt, user_prompt)
-        max_attempts = min(2, max(1, self.config.retry_attempts))
+        return self._call_provider_with_retries(
+            system_prompt,
+            user_prompt,
+            failure_label="Ranking provider call",
+        )
+
+    def _call_provider_with_retries(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        failure_label: str,
+    ) -> str:
+        max_attempts = max(1, self.config.retry_attempts)
         last_error: Exception | None = None
 
         for attempt in range(max_attempts):
@@ -604,7 +694,8 @@ class PaperRanker:
                 if not is_retryable_llm_error(error) or attempt == max_attempts - 1:
                     break
                 LOGGER.warning(
-                    "Ranking provider call failed on attempt %s/%s; retrying in %ss: %s",
+                    "%s failed on attempt %s/%s; retrying in %ss: %s",
+                    failure_label,
                     attempt + 1,
                     max_attempts,
                     _RANKING_RETRY_WAIT_SECONDS,
@@ -612,7 +703,7 @@ class PaperRanker:
                 )
                 time.sleep(_RANKING_RETRY_WAIT_SECONDS)
 
-        raise RankingError(f"Ranking provider call failed: {last_error}") from last_error
+        raise RankingError(f"{failure_label} failed: {last_error}") from last_error
 
     def _repair_ranking_payload(
         self,
@@ -632,14 +723,8 @@ class PaperRanker:
         )
         if self.prompt_logger:
             self.prompt_logger.write(label, system_prompt, user_prompt)
-        try:
-            return self.provider.process_document(
-                content="",
-                is_pdf=False,
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                max_tokens=self.config.max_output_tokens,
-                temperature=0.0,
-            ).strip()
-        except Exception as error:
-            raise RankingError(f"Ranking repair call failed: {error}") from error
+        return self._call_provider_with_retries(
+            system_prompt,
+            user_prompt,
+            failure_label="Ranking repair call",
+        )
