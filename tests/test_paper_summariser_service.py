@@ -41,7 +41,7 @@ class RecordingProvider(Provider):
     def supports_direct_pdf(self):
         return self._supports_direct_pdf
 
-    def process_document(self, content, is_pdf, system_prompt, user_prompt, max_tokens=12288):
+    def process_document(self, content, is_pdf, system_prompt, user_prompt, max_tokens=12288, temperature=None):
         self.calls.append(
             {
                 "content": content,
@@ -632,7 +632,7 @@ def test_generate_tags_falls_back_on_provider_failure(tmp_path: Path) -> None:
         def setup(self):
             pass
 
-        def process_document(self, content, is_pdf, system_prompt, user_prompt, max_tokens=12288):
+        def process_document(self, content, is_pdf, system_prompt, user_prompt, max_tokens=12288, temperature=None):
             raise ValueError("API key missing")
 
         def get_max_context_size(self):

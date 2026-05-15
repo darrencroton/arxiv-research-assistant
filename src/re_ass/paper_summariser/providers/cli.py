@@ -138,7 +138,7 @@ class CLIProvider(Provider):
         """Return an actionable hint for known provider failures."""
         return None
 
-    def process_document(self, content, is_pdf, system_prompt, user_prompt, max_tokens=12288):
+    def process_document(self, content, is_pdf, system_prompt, user_prompt, max_tokens=12288, temperature=None):
         """Process document by invoking the CLI tool with the combined prompt."""
         combined_prompt = f"{system_prompt}\n\n{user_prompt}"
         cmd = self._build_command(combined_prompt)
@@ -236,7 +236,7 @@ class CodexCLI(CLIProvider):
             return "Run `codex login` before running `re-ass`."
         return None
 
-    def process_document(self, content, is_pdf, system_prompt, user_prompt, max_tokens=12288):
+    def process_document(self, content, is_pdf, system_prompt, user_prompt, max_tokens=12288, temperature=None):
         """Run Codex using stdin for the prompt and a temp file for the final reply.
 
         Codex writes session banners and warnings to stdout in exec mode. Using

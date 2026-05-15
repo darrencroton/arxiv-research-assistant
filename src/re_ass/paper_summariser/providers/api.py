@@ -85,7 +85,7 @@ class ClaudeAPI(Provider):
         if not self.model:
             self.model = self.default_model
 
-    def process_document(self, content, is_pdf, system_prompt, user_prompt, max_tokens=12288):
+    def process_document(self, content, is_pdf, system_prompt, user_prompt, max_tokens=12288, temperature=None):
         """Process document with the Claude Messages API."""
         messages = [{"role": "user", "content": [{"type": "text", "text": user_prompt}]}]
 
@@ -101,7 +101,7 @@ class ClaudeAPI(Provider):
 
         response = self.client.messages.create(
             model=self.model,
-            temperature=self.config.get("temperature", 0.2),
+            temperature=temperature if temperature is not None else self.config.get("temperature", 0.2),
             max_tokens=max_tokens,
             system=system_prompt,
             messages=messages,
@@ -133,8 +133,9 @@ class OpenAIAPI(Provider):
         if not self.model:
             self.model = self.default_model
 
-    def process_document(self, content, is_pdf, system_prompt, user_prompt, max_tokens=12288):
+    def process_document(self, content, is_pdf, system_prompt, user_prompt, max_tokens=12288, temperature=None):
         """Process document — uses Responses API for PDFs, Chat Completions for text."""
+        effective_temperature = temperature if temperature is not None else self.config.get("temperature", 0.2)
         if is_pdf and isinstance(content, bytes):
             input_content = [
                 {"role": "system", "content": system_prompt},
@@ -153,7 +154,7 @@ class OpenAIAPI(Provider):
             response = self.client.responses.create(
                 model=self.model,
                 input=input_content,
-                temperature=self.config.get("temperature", 0.2),
+                temperature=effective_temperature,
                 max_output_tokens=max_tokens,
             )
             return response.output[0].content[0].text
@@ -164,7 +165,7 @@ class OpenAIAPI(Provider):
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                temperature=self.config.get("temperature", 0.2),
+                temperature=effective_temperature,
                 max_tokens=max_tokens,
             )
             return response.choices[0].message.content
@@ -201,13 +202,13 @@ class GeminiAPI(Provider):
             self.model = self.default_model
         logging.info(f"Gemini model: {self.model}")
 
-    def process_document(self, content, is_pdf, system_prompt, user_prompt, max_tokens=12288):
+    def process_document(self, content, is_pdf, system_prompt, user_prompt, max_tokens=12288, temperature=None):
         """Process document with the Gemini API using system_instruction."""
         from google.genai import types
 
         config = types.GenerateContentConfig(
             system_instruction=system_prompt,
-            temperature=self.config.get("temperature", 0.2),
+            temperature=temperature if temperature is not None else self.config.get("temperature", 0.2),
             max_output_tokens=max_tokens,
             top_p=0.95,
             top_k=40,
@@ -261,7 +262,7 @@ class PerplexityAPI(Provider):
         if not self.model:
             self.model = self.default_model
 
-    def process_document(self, content, is_pdf, system_prompt, user_prompt, max_tokens=12288):
+    def process_document(self, content, is_pdf, system_prompt, user_prompt, max_tokens=12288, temperature=None):
         """Process document via Perplexity's OpenAI-compatible chat completions endpoint."""
         response = self.client.chat.completions.create(
             model=self.model,
@@ -269,7 +270,7 @@ class PerplexityAPI(Provider):
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=self.config.get("temperature", 0.2),
+            temperature=temperature if temperature is not None else self.config.get("temperature", 0.2),
             max_tokens=max_tokens,
         )
         return response.choices[0].message.content
@@ -338,7 +339,7 @@ class OpenAICompatibleAPI(Provider):
                 ", ".join(sorted(model_ids)),
             )
 
-    def process_document(self, content, is_pdf, system_prompt, user_prompt, max_tokens=12288):
+    def process_document(self, content, is_pdf, system_prompt, user_prompt, max_tokens=12288, temperature=None):
         """Process document via the OpenAI-compatible chat completions endpoint."""
         response = self.client.chat.completions.create(
             model=self.model,
@@ -346,7 +347,7 @@ class OpenAICompatibleAPI(Provider):
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=self.config.get("temperature", 0.2),
+            temperature=temperature if temperature is not None else self.config.get("temperature", 0.2),
             max_tokens=max_tokens,
         )
         choice = response.choices[0]
@@ -399,7 +400,7 @@ class OllamaAPI(Provider):
         if not self.model:
             self.model = self.default_model
 
-    def process_document(self, content, is_pdf, system_prompt, user_prompt, max_tokens=12288):
+    def process_document(self, content, is_pdf, system_prompt, user_prompt, max_tokens=12288, temperature=None):
         """Process document with the Ollama generate API."""
         data = {
             "model": self.model,
@@ -407,7 +408,7 @@ class OllamaAPI(Provider):
             "system": system_prompt,
             "stream": False,
             "options": {
-                "temperature": self.config.get("temperature", 0.2),
+                "temperature": temperature if temperature is not None else self.config.get("temperature", 0.2),
                 "num_ctx": min(self.default_context_size, 24576),
                 "num_predict": max_tokens,
                 "stop": ["</input>", "</task>"],

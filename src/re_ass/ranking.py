@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 import json
 import logging
@@ -387,6 +388,16 @@ def _parse_ranked_payload(
 _BATCH_OVERFLOW_FRACTION = 0.2
 
 
+def _apply_dual_match_cap(ranked: list[RankedPaper]) -> list[RankedPaper]:
+    """Clamp one-sided papers to ≤69, enforcing the scoring guide regardless of model compliance."""
+    return [
+        dataclasses.replace(r, score=69.0)
+        if (r.science_match is False or r.method_match is False) and r.score > 69.0
+        else r
+        for r in ranked
+    ]
+
+
 def _split_into_batches(candidates: list[ArxivPaper], batch_size: int) -> list[list[ArxivPaper]]:
     """Split candidates into the fewest evenly-sized batches where each fits within batch_size + 20%."""
     n = len(candidates)
@@ -434,6 +445,7 @@ class PaperRanker:
                 weekly_interest=[],
             )
 
+        dual_match_required = _requires_dual_match(preferences)
         batches = _split_into_batches(candidates, self.batch_size) if self.batch_size > 0 else [candidates]
         LOGGER.info(
             "Ranking %s candidate(s) in %s batch(es).",
@@ -441,14 +453,31 @@ class PaperRanker:
             len(batches),
         )
         all_ranked: list[RankedPaper] = []
+        # Track papers whose scores were capped so weekly_interest can still surface them.
+        capped_keys: set[str] = set()
         for batch_index, batch in enumerate(batches, 1):
             if len(batches) > 1:
                 LOGGER.info("Ranking batch %s/%s (%s candidate(s)).", batch_index, len(batches), len(batch))
-            all_ranked.extend(self._rank_candidates_batch(preferences, batch))
+            batch_ranked = self._rank_candidates_batch(preferences, batch)
+            if dual_match_required:
+                for r in batch_ranked:
+                    if (r.science_match is False or r.method_match is False) and r.score > 69.0:
+                        capped_keys.add(r.paper_key)
+                batch_ranked = _apply_dual_match_cap(batch_ranked)
+            all_ranked.extend(batch_ranked)
 
         if len(batches) > 1:
-            finalist_threshold = max(0.0, self.min_selection_score - 20.0)
-            finalist_papers = [r.paper for r in all_ranked if r.score >= finalist_threshold]
+            finalist_threshold = max(0.0, self.min_selection_score - 10.0)
+            # Restrict re-rank to dual-match eligible papers; one-sided papers can never be
+            # selected and including them in the finalist pool skews the re-rank ordering.
+            if dual_match_required:
+                finalist_papers = [
+                    r.paper for r in all_ranked
+                    if r.score >= finalist_threshold
+                    and r.science_match is True and r.method_match is True
+                ]
+            else:
+                finalist_papers = [r.paper for r in all_ranked if r.score >= finalist_threshold]
             if len(finalist_papers) > 1:
                 LOGGER.info(
                     "Re-ranking %s finalist(s) from %s batches for calibrated global ordering.",
@@ -457,14 +486,14 @@ class PaperRanker:
                 )
                 try:
                     re_ranked = self._rank_candidates_batch(preferences, finalist_papers)
+                    if dual_match_required:
+                        re_ranked = _apply_dual_match_cap(re_ranked)
                     re_ranked_by_key = {r.paper_key: r for r in re_ranked}
                     all_ranked = [re_ranked_by_key.get(r.paper_key, r) for r in all_ranked]
                 except RankingError as error:
                     LOGGER.warning("Finalist re-ranking failed; using per-batch scores: %s", error)
 
         ranked = sorted(all_ranked, key=lambda r: (-r.score, r.paper.title.casefold()))
-
-        dual_match_required = _requires_dual_match(preferences)
         eligible = [
             item
             for item in ranked
@@ -481,10 +510,11 @@ class PaperRanker:
         selected_keys = {item.paper_key for item in selected}
         # Use score-only threshold for weekly interest so that partial-match papers
         # (science-only or method-only) are not silently excluded when dual_match is
-        # required for selection.
+        # required for selection. Capped papers are included regardless of their clamped
+        # score, since the cap is a selection guard, not a signal that the paper is uninteresting.
         weekly_interest = [
             item for item in ranked
-            if item.score >= self.min_selection_score
+            if (item.score >= self.min_selection_score or item.paper_key in capped_keys)
             and item.paper_key not in selected_keys
         ]
         LOGGER.info(
@@ -555,6 +585,7 @@ class PaperRanker:
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
                     max_tokens=self.config.max_output_tokens,
+                    temperature=0.0,
                 ).strip()
             except Exception as error:
                 last_error = error
@@ -593,6 +624,7 @@ class PaperRanker:
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 max_tokens=self.config.max_output_tokens,
+                temperature=0.0,
             ).strip()
         except Exception as error:
             raise RankingError(f"Ranking repair call failed: {error}") from error

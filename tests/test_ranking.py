@@ -12,7 +12,7 @@ class RecordingProvider:
         self.responses = [response] if isinstance(response, str) else list(response)
         self.calls = []
 
-    def process_document(self, content, is_pdf, system_prompt, user_prompt, max_tokens=12288):
+    def process_document(self, content, is_pdf, system_prompt, user_prompt, max_tokens=12288, temperature=None):
         self.calls.append(
             {
                 "content": content,
@@ -32,8 +32,8 @@ class FlakyProvider:
         self.responses = list(responses)
         self.calls = 0
 
-    def process_document(self, content, is_pdf, system_prompt, user_prompt, max_tokens=12288):
-        del content, is_pdf, system_prompt, user_prompt, max_tokens
+    def process_document(self, content, is_pdf, system_prompt, user_prompt, max_tokens=12288, temperature=None):
+        del content, is_pdf, system_prompt, user_prompt, max_tokens, temperature
         self.calls += 1
         if not self.responses:
             raise AssertionError("provider was called more times than expected")

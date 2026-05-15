@@ -27,7 +27,7 @@ class Provider:
         """Initialise provider-specific components. Override in subclasses."""
         pass
 
-    def process_document(self, content, is_pdf, system_prompt, user_prompt, max_tokens=12288):
+    def process_document(self, content, is_pdf, system_prompt, user_prompt, max_tokens=12288, temperature=None):
         """Process a document and return the generated summary text.
 
         Args:
