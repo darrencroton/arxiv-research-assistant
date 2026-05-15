@@ -72,8 +72,6 @@ class LlmConfig:
 class AppConfig:
     """Application configuration matching the settings.toml schema."""
 
-    project_root: Path
-
     # output/
     output_root: Path
     summaries_dir: Path
@@ -112,7 +110,6 @@ class AppConfig:
     weekly_synthesis_max_tokens: int
 
     # arxiv
-    max_papers: int
     arxiv_page_size: int
     always_summarize_score: float
     min_selection_score: float
@@ -355,7 +352,6 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
     )
 
     return AppConfig(
-        project_root=root,
         output_root=output_root,
         summaries_dir=summaries_dir,
         daily_notes_dir=daily_notes_dir,
@@ -381,7 +377,6 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
         weekly_synthesis_word_limit_start=weekly_synthesis_word_limit_start,
         weekly_synthesis_word_limit_end=weekly_synthesis_word_limit_end,
         weekly_synthesis_max_tokens=weekly_synthesis_max_tokens,
-        max_papers=int(arxiv_data.get("max_papers", 3)),
         arxiv_page_size=int(arxiv_data.get("page_size", arxiv_data.get("max_results", 100))),
         always_summarize_score=always_summarize_score,
         min_selection_score=min_selection_score,

@@ -17,6 +17,9 @@ from re_ass.settings import LlmConfig
 
 LOGGER = logging.getLogger(__name__)
 _RANKING_RETRY_WAIT_SECONDS = 2
+# When no paper clears always_summarize_score, take this many from the top of the
+# above-min_selection_score pool so the daily note is never silently blank.
+_ABOVE_MIN_FILL_COUNT = 1
 
 
 class RankingError(RuntimeError):
@@ -407,14 +410,12 @@ class PaperRanker:
         *,
         provider: Provider,
         config: LlmConfig,
-        max_papers: int,
         always_summarize_score: float,
         min_selection_score: float,
         batch_size: int = 0,
     ) -> None:
         self.provider = provider
         self.config = config
-        self.max_papers = max(0, max_papers)
         self.always_summarize_score = always_summarize_score
         self.min_selection_score = min_selection_score
         self.batch_size = max(0, batch_size)
@@ -475,7 +476,7 @@ class PaperRanker:
         ]
         always_selected = [item for item in eligible if item.score >= self.always_summarize_score]
         fill_candidates = [item for item in eligible if item.score < self.always_summarize_score]
-        remaining_slots = max(0, self.max_papers - len(always_selected))
+        remaining_slots = 0 if always_selected else _ABOVE_MIN_FILL_COUNT
         selected = always_selected + fill_candidates[:remaining_slots]
         selected_keys = {item.paper_key for item in selected}
         # Use score-only threshold for weekly interest so that partial-match papers
@@ -487,12 +488,12 @@ class PaperRanker:
             and item.paper_key not in selected_keys
         ]
         LOGGER.info(
-            "Ranked %s candidate(s): selected=%s always_threshold=%s interest_threshold=%s target_cap=%s weekly_interest=%s dual_match_required=%s",
+            "Ranked %s candidate(s): selected=%s always_threshold=%s interest_threshold=%s above_min_fill=%s weekly_interest=%s dual_match_required=%s",
             len(candidates),
             len(selected),
             self.always_summarize_score,
             self.min_selection_score,
-            self.max_papers,
+            _ABOVE_MIN_FILL_COUNT,
             len(weekly_interest),
             dual_match_required,
         )

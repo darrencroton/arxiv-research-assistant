@@ -125,21 +125,19 @@ class FakeGenerationService:
 
 
 class FakeRanker:
-    last_max_papers = None
     last_always_summarize_score = None
 
-    def __init__(self, *, selection=None, max_papers=None, always_summarize_score=None, **_kwargs) -> None:
+    def __init__(self, *, selection=None, always_summarize_score=None, **_kwargs) -> None:
         self.selection = selection
-        FakeRanker.last_max_papers = max_papers
         FakeRanker.last_always_summarize_score = always_summarize_score
 
     def rank_papers(self, _preferences, candidates):
-        selection = self.selection or _build_selection(candidates, selected=candidates[: FakeRanker.last_max_papers])
+        selection = self.selection or _build_selection(candidates, selected=candidates[:1])
         return SimpleNamespace(
-            selected_papers=list(selection.selected_papers)[: FakeRanker.last_max_papers],
+            selected_papers=list(selection.selected_papers),
             candidate_count=selection.candidate_count,
             ranked=selection.ranked,
-            selected=selection.selected[: FakeRanker.last_max_papers],
+            selected=selection.selected,
             weekly_interest=selection.weekly_interest,
         )
 
@@ -513,7 +511,7 @@ def test_pipeline_regenerates_weekly_synthesis_from_full_week_context(tmp_path: 
 
 
 def test_pipeline_writes_weekly_interest_bullets_without_leaking_them_into_synthesis(tmp_path: Path, monkeypatch) -> None:
-    config = make_app_config(tmp_path, max_papers=2, always_summarize_score=90.0, min_selection_score=70.0)
+    config = make_app_config(tmp_path, always_summarize_score=90.0, min_selection_score=70.0)
     summarized = make_paper(arxiv_id="2603.30071", title="Summarized Paper")
     weekly_only = make_paper(
         arxiv_id="2603.30072",
@@ -554,20 +552,21 @@ def test_pipeline_writes_weekly_interest_bullets_without_leaking_them_into_synth
     assert "Peng Y." not in generation_service.weekly_synthesis_calls[0]["weekly_additions"]
 
 
-def test_pipeline_with_zero_max_papers_skips_daily_note_and_synthesis_when_only_weekly_interest_exists(
+def test_pipeline_writes_no_papers_placeholder_when_nothing_clears_threshold(
     tmp_path: Path, monkeypatch
 ) -> None:
-    config = make_app_config(tmp_path, max_papers=0, always_summarize_score=90.0, min_selection_score=70.0)
-    weekly_only = make_paper(
+    config = make_app_config(tmp_path, always_summarize_score=90.0, min_selection_score=70.0)
+    candidate = make_paper(
         arxiv_id="2603.30073",
-        title="Weekly Interest Only",
+        title="Below Threshold Paper",
         authors=("Elena Banados", "Yuan Peng"),
     )
-    selection = _build_selection([weekly_only], selected=[], weekly_interest=[weekly_only])
+    # Ranking returns empty selected — nothing cleared any threshold.
+    selection = _build_selection([candidate], selected=[], weekly_interest=[])
     generation_service = FakeGenerationService()
     monkeypatch.setattr(
         "re_ass.pipeline.ArxivFetcher",
-        lambda **_kwargs: FakeFetcher([weekly_only], available_dates=[date(2026, 3, 25)]),
+        lambda **_kwargs: FakeFetcher([candidate], available_dates=[date(2026, 3, 25)]),
     )
     monkeypatch.setattr("re_ass.pipeline.PaperRanker", lambda **kwargs: FakeRanker(selection=selection, **kwargs))
     monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: _preferences())
@@ -577,15 +576,47 @@ def test_pipeline_with_zero_max_papers_skips_daily_note_and_synthesis_when_only_
 
     assert exit_code == 0
     assert generation_service.weekly_synthesis_calls == []
-    assert not any(config.daily_notes_dir.glob("*.md"))
+    daily_notes = list(config.daily_notes_dir.glob("*.md"))
+    assert len(daily_notes) == 1
+    assert "No top papers today." in daily_notes[0].read_text(encoding="utf-8")
+
+
+def test_pipeline_writes_weekly_interest_when_nothing_selected_but_partial_matches_exist(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Regression test: dual_match failures leave selected=[] but weekly_interest non-empty.
+    # The weekly note must still receive interest bullets even when the daily note shows
+    # the no-papers placeholder.
+    config = make_app_config(tmp_path, always_summarize_score=90.0, min_selection_score=70.0)
+    partial_match = make_paper(
+        arxiv_id="2603.30076",
+        title="Partial Match Paper",
+        authors=("Elena Banados", "Yuan Peng"),
+    )
+    selection = _build_selection([partial_match], selected=[], weekly_interest=[partial_match])
+    generation_service = FakeGenerationService()
+    monkeypatch.setattr(
+        "re_ass.pipeline.ArxivFetcher",
+        lambda **_kwargs: FakeFetcher([partial_match], available_dates=[date(2026, 3, 25)]),
+    )
+    monkeypatch.setattr("re_ass.pipeline.PaperRanker", lambda **kwargs: FakeRanker(selection=selection, **kwargs))
+    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: _preferences())
+    monkeypatch.setattr("re_ass.pipeline.GenerationService", lambda **_kwargs: generation_service)
+
+    exit_code = run(config, date(2026, 3, 25))
+
+    assert exit_code == 0
+    assert generation_service.weekly_synthesis_calls == []
+    daily_notes = list(config.daily_notes_dir.glob("*.md"))
+    assert len(daily_notes) == 1
+    assert "No top papers today." in daily_notes[0].read_text(encoding="utf-8")
     weekly_text = (config.weekly_notes_dir / config.weekly_note_file).read_text(encoding="utf-8")
+    assert "Partial Match Paper" in weekly_text
     assert "**Other papers of interest:**" in weekly_text
-    assert "Weekly Interest Only" in weekly_text
-    assert "## SYNTHESIS\n\n*(A synthesis of this week's papers will be automatically generated here. Max 100 words.)*" in weekly_text
 
 
 def test_pipeline_still_writes_weekly_interest_when_selected_papers_all_fail(tmp_path: Path, monkeypatch) -> None:
-    config = make_app_config(tmp_path, max_papers=1, always_summarize_score=90.0, min_selection_score=70.0)
+    config = make_app_config(tmp_path, always_summarize_score=90.0, min_selection_score=70.0)
     selected = make_paper(arxiv_id="2603.30074", title="Failing Selected Paper")
     weekly_only = make_paper(
         arxiv_id="2603.30075",
@@ -634,7 +665,6 @@ def test_pipeline_records_announcement_and_ranking_diagnostics(tmp_path: Path, m
     assert '"available_announcement_dates"' in summary_text
     assert '"visible_window_start": "2026-03-26"' in summary_text
     assert '"candidate_count": 2' in summary_text
-    assert '"max_papers": 10' in summary_text
     assert '"always_summarize_score": 90.0' in summary_text
     assert '"min_selection_score": 70.0' in summary_text
     assert '"ranking_results"' in summary_text
@@ -642,16 +672,3 @@ def test_pipeline_records_announcement_and_ranking_diagnostics(tmp_path: Path, m
     assert '"weekly_interest_results"' in summary_text
 
 
-def test_pipeline_uses_configured_max_papers_for_selection_cap(tmp_path: Path, monkeypatch) -> None:
-    config = make_app_config(tmp_path, max_papers=5)
-    papers = [make_paper(arxiv_id=f"2603.30{index:03d}", title=f"Paper {index}") for index in range(1, 7)]
-    monkeypatch.setattr("re_ass.pipeline.ArxivFetcher", lambda **_kwargs: FakeFetcher(papers, available_dates=[date(2026, 3, 29)]))
-    monkeypatch.setattr("re_ass.pipeline.PaperRanker", lambda **kwargs: FakeRanker(**kwargs))
-    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: _preferences())
-    monkeypatch.setattr("re_ass.pipeline.GenerationService", lambda **_kwargs: FakeGenerationService())
-
-    exit_code = run(config, date(2026, 3, 29))
-
-    assert exit_code == 0
-    assert FakeRanker.last_max_papers == 5
-    assert FakeRanker.last_always_summarize_score == 90.0

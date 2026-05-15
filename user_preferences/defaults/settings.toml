@@ -37,8 +37,7 @@ weekly_synthesis_max_tokens = 4096  # effective cap is min(this, [llm].max_outpu
 
 [arxiv]
 always_summarize_score = 85
-min_selection_score = 65
-max_papers = 1
+min_selection_score = 70
 page_size = 100
 
 [llm]

@@ -48,7 +48,6 @@ def _seed_test_user_files(config: AppConfig) -> None:
 
 def make_app_config(tmp_path: Path, **overrides) -> AppConfig:
     config = AppConfig(
-        project_root=tmp_path,
         output_root=tmp_path / "output",
         summaries_dir=tmp_path / "output" / "summaries",
         daily_notes_dir=tmp_path / "output" / "daily-notes",
@@ -74,7 +73,6 @@ def make_app_config(tmp_path: Path, **overrides) -> AppConfig:
         weekly_synthesis_word_limit_start=100,
         weekly_synthesis_word_limit_end=200,
         weekly_synthesis_max_tokens=4096,
-        max_papers=10,
         arxiv_page_size=50,
         always_summarize_score=90.0,
         min_selection_score=70.0,

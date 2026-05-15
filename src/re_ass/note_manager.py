@@ -513,6 +513,23 @@ class NoteManager:
             link_style=self.config.link_style,
         )
 
+    def mark_daily_no_papers(
+        self,
+        note_date: date,
+        *,
+        reference_date: date | None = None,  # accepted for call-site symmetry; unused (no weekly-note link in placeholder)
+    ) -> Path:
+        reference_date = reference_date or note_date
+        daily_path = self.config.daily_notes_dir / f"{note_date.isoformat()}.md"
+        if daily_path.exists():
+            text = daily_path.read_text(encoding="utf-8")
+        else:
+            template = self.config.daily_template.read_text(encoding="utf-8")
+            text = _render_daily_template(template, note_date)
+        updated = _replace_section(text, self.config.daily_top_paper_heading, "No top papers today.")
+        daily_path.write_text(updated.rstrip() + "\n", encoding="utf-8")
+        return daily_path
+
     def update_daily_note(
         self,
         note_date: date,

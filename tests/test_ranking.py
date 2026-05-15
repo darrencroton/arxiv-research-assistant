@@ -69,7 +69,6 @@ def test_ranker_uses_ordered_priorities_and_compact_candidate_payload(tmp_path) 
     ranker = PaperRanker(
         provider=provider,
         config=make_app_config(tmp_path).llm,
-        max_papers=3,
         always_summarize_score=90.0,
         min_selection_score=80.0,
     )
@@ -116,7 +115,6 @@ def test_ranker_requires_science_and_method_matches_when_sections_are_present(tm
     ranker = PaperRanker(
         provider=provider,
         config=make_app_config(tmp_path).llm,
-        max_papers=5,
         always_summarize_score=90.0,
         min_selection_score=80.0,
     )
@@ -143,7 +141,7 @@ def test_ranker_requires_science_and_method_matches_when_sections_are_present(tm
     assert '"science_match":true' in prompt
 
 
-def test_ranker_filters_by_threshold_and_cap(tmp_path) -> None:
+def test_ranker_filters_by_threshold(tmp_path) -> None:
     papers = [
         make_paper(arxiv_id="2603.40021", title="Strong Fit"),
         make_paper(arxiv_id="2603.40022", title="Second Fit"),
@@ -163,15 +161,16 @@ def test_ranker_filters_by_threshold_and_cap(tmp_path) -> None:
     ranker = PaperRanker(
         provider=provider,
         config=make_app_config(tmp_path).llm,
-        max_papers=2,
         always_summarize_score=90.0,
         min_selection_score=80.0,
     )
 
     selection = ranker.rank_papers(_preferences("Agents"), papers)
 
-    assert [paper.title for paper in selection.selected_papers] == ["Strong Fit", "Second Fit"]
-    assert selection.weekly_interest == []
+    # Strong Fit clears always_summarize_score → selected; Second Fit is mid-band but
+    # always_selected is non-empty so remaining_slots=0 → weekly_interest.
+    assert [paper.title for paper in selection.selected_papers] == ["Strong Fit"]
+    assert [item.paper.title for item in selection.weekly_interest] == ["Second Fit"]
     assert [item.paper.title for item in selection.ranked] == ["Strong Fit", "Second Fit", "Weak Fit"]
 
 
@@ -193,7 +192,6 @@ def test_ranker_sorts_by_score_when_provider_returns_unsorted_payload(tmp_path) 
     ranker = PaperRanker(
         provider=provider,
         config=make_app_config(tmp_path).llm,
-        max_papers=1,
         always_summarize_score=90.0,
         min_selection_score=80.0,
     )
@@ -227,18 +225,19 @@ def test_ranker_always_keeps_top_band_and_overflows_mid_band_to_weekly_interest(
     ranker = PaperRanker(
         provider=provider,
         config=make_app_config(tmp_path).llm,
-        max_papers=2,
         always_summarize_score=90.0,
         min_selection_score=70.0,
     )
 
     selection = ranker.rank_papers(_preferences("Agents"), papers)
 
-    assert [paper.title for paper in selection.selected_papers] == ["Exceptional Fit", "Strong Mid Fit"]
-    assert [item.paper.title for item in selection.weekly_interest] == ["Overflow Mid Fit"]
+    # Exceptional Fit clears always_summarize_score → always selected. Mid-band papers
+    # get remaining_slots=0 (always_selected is non-empty) → all overflow to weekly_interest.
+    assert [paper.title for paper in selection.selected_papers] == ["Exceptional Fit"]
+    assert [item.paper.title for item in selection.weekly_interest] == ["Strong Mid Fit", "Overflow Mid Fit"]
 
 
-def test_ranker_can_exceed_max_papers_for_multiple_top_band_matches(tmp_path) -> None:
+def test_ranker_keeps_all_top_band_papers_regardless_of_count(tmp_path) -> None:
     papers = [
         make_paper(arxiv_id="2603.40037", title="Top Fit One"),
         make_paper(arxiv_id="2603.40038", title="Top Fit Two"),
@@ -260,7 +259,6 @@ def test_ranker_can_exceed_max_papers_for_multiple_top_band_matches(tmp_path) ->
     ranker = PaperRanker(
         provider=provider,
         config=make_app_config(tmp_path).llm,
-        max_papers=2,
         always_summarize_score=90.0,
         min_selection_score=70.0,
     )
@@ -271,7 +269,7 @@ def test_ranker_can_exceed_max_papers_for_multiple_top_band_matches(tmp_path) ->
     assert [item.paper.title for item in selection.weekly_interest] == ["Mid Fit"]
 
 
-def test_ranker_with_zero_max_papers_keeps_only_always_summarize_matches(tmp_path) -> None:
+def test_ranker_selects_always_band_and_overflows_mid_band_when_top_papers_exist(tmp_path) -> None:
     papers = [
         make_paper(arxiv_id="2603.40061", title="Always Keep"),
         make_paper(arxiv_id="2603.40062", title="Weekly Only"),
@@ -291,7 +289,6 @@ def test_ranker_with_zero_max_papers_keeps_only_always_summarize_matches(tmp_pat
     ranker = PaperRanker(
         provider=provider,
         config=make_app_config(tmp_path).llm,
-        max_papers=0,
         always_summarize_score=90.0,
         min_selection_score=70.0,
     )
@@ -302,16 +299,16 @@ def test_ranker_with_zero_max_papers_keeps_only_always_summarize_matches(tmp_pat
     assert [item.paper.title for item in selection.weekly_interest] == ["Weekly Only"]
 
 
-def test_ranker_with_zero_max_papers_can_return_weekly_interest_only(tmp_path) -> None:
+def test_ranker_selects_one_fill_paper_when_no_top_band_papers_exist(tmp_path) -> None:
     papers = [
-        make_paper(arxiv_id="2603.40064", title="Weekly Only One"),
-        make_paper(arxiv_id="2603.40065", title="Weekly Only Two"),
+        make_paper(arxiv_id="2603.40064", title="Fill Candidate One"),
+        make_paper(arxiv_id="2603.40065", title="Fill Candidate Two"),
     ]
     provider = RecordingProvider(
         json.dumps(
             {
                 "ranked_papers": [
-                    {"candidate_id": "arxiv:2603.40064", "score": 83, "rationale": "Good weekly-only fit."},
+                    {"candidate_id": "arxiv:2603.40064", "score": 83, "rationale": "Good above-min fit."},
                     {"candidate_id": "arxiv:2603.40065", "score": 75, "rationale": "Also worth listing."},
                 ]
             }
@@ -320,15 +317,15 @@ def test_ranker_with_zero_max_papers_can_return_weekly_interest_only(tmp_path) -
     ranker = PaperRanker(
         provider=provider,
         config=make_app_config(tmp_path).llm,
-        max_papers=0,
         always_summarize_score=90.0,
         min_selection_score=70.0,
     )
 
     selection = ranker.rank_papers(_preferences("Agents"), papers)
 
-    assert selection.selected_papers == []
-    assert [item.paper.title for item in selection.weekly_interest] == ["Weekly Only One", "Weekly Only Two"]
+    # No always-band papers → _ABOVE_MIN_FILL_COUNT=1 slot opened → top fill candidate selected.
+    assert [paper.title for paper in selection.selected_papers] == ["Fill Candidate One"]
+    assert [item.paper.title for item in selection.weekly_interest] == ["Fill Candidate Two"]
 
 
 def test_ranker_repairs_invalid_payload_once(tmp_path) -> None:
@@ -359,14 +356,15 @@ def test_ranker_repairs_invalid_payload_once(tmp_path) -> None:
     ranker = PaperRanker(
         provider=provider,
         config=make_app_config(tmp_path).llm,
-        max_papers=2,
         always_summarize_score=90.0,
         min_selection_score=70.0,
     )
 
     selection = ranker.rank_papers(_preferences("Agents"), papers)
 
-    assert [paper.title for paper in selection.selected_papers] == ["Paper One", "Paper Two"]
+    # Paper One (97) is always-band; Paper Two (75) is mid-band but remaining_slots=0.
+    assert [paper.title for paper in selection.selected_papers] == ["Paper One"]
+    assert [item.paper.title for item in selection.weekly_interest] == ["Paper Two"]
     assert len(provider.calls) == 2
     assert "validation_error" in provider.calls[1]["user_prompt"]
 
@@ -377,7 +375,6 @@ def test_ranker_fills_missing_papers_with_score_zero(tmp_path) -> None:
     ranker = PaperRanker(
         provider=provider,
         config=make_app_config(tmp_path).llm,
-        max_papers=1,
         always_summarize_score=90.0,
         min_selection_score=80.0,
     )
@@ -466,7 +463,6 @@ def test_ranker_batches_candidates_and_merges_by_score(tmp_path) -> None:
     ranker = PaperRanker(
         provider=provider,
         config=make_app_config(tmp_path).llm,
-        max_papers=1,
         always_summarize_score=90.0,
         min_selection_score=70.0,
         batch_size=2,
@@ -513,7 +509,6 @@ def test_ranker_requires_full_ranked_list_after_repair(tmp_path) -> None:
     ranker = PaperRanker(
         provider=provider,
         config=make_app_config(tmp_path).llm,
-        max_papers=1,
         always_summarize_score=90.0,
         min_selection_score=80.0,
     )
@@ -540,7 +535,6 @@ def test_ranker_retries_once_after_retryable_provider_failure(tmp_path, monkeypa
     ranker = PaperRanker(
         provider=provider,
         config=make_app_config(tmp_path).llm,
-        max_papers=3,
         always_summarize_score=90.0,
         min_selection_score=80.0,
     )
@@ -560,7 +554,6 @@ def test_ranker_does_not_retry_non_retryable_provider_failure(tmp_path, monkeypa
     ranker = PaperRanker(
         provider=provider,
         config=make_app_config(tmp_path).llm,
-        max_papers=3,
         always_summarize_score=90.0,
         min_selection_score=80.0,
     )

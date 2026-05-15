@@ -158,7 +158,6 @@ def _run_summary_base(invocation_date: date, llm_stamp: dict[str, object] | None
         "visible_window_end": None,
         "candidate_count": 0,
         "candidate_keys": [],
-        "max_papers": 0,
         "always_summarize_score": 0.0,
         "min_selection_score": 0.0,
         "selected_paper_keys": [],
@@ -377,7 +376,6 @@ def _run_announcement_day(
         ranker = PaperRanker(
             provider=generation_service.provider,
             config=config.llm,
-            max_papers=config.max_papers,
             always_summarize_score=config.always_summarize_score,
             min_selection_score=config.min_selection_score,
             batch_size=config.llm.ranking_batch_size,
@@ -386,7 +384,6 @@ def _run_announcement_day(
         selected_papers = selection.selected_papers
         weekly_interest_papers = [item.paper for item in selection.weekly_interest]
 
-        run_summary["max_papers"] = config.max_papers
         run_summary["always_summarize_score"] = config.always_summarize_score
         run_summary["min_selection_score"] = config.min_selection_score
         run_summary["selected_paper_keys"] = _paper_keys(selected_papers)
@@ -397,58 +394,83 @@ def _run_announcement_day(
         run_summary["selected_papers"] = len(selected_papers)
         run_summary["weekly_interest_papers"] = len(weekly_interest_papers)
 
-        successful_papers = _process_selected_papers(
-            config,
-            state_store,
-            generation_service,
-            selected_papers=selected_papers,
-            run_summary=run_summary,
-        )
-
-        if successful_papers:
-            note_manager.update_daily_note(note_date, successful_papers[0], reference_date=invocation_date)
+        if not selected_papers and candidates:
+            # Candidates were fetched and ranked but none cleared any threshold.
+            note_manager.mark_daily_no_papers(note_date, reference_date=invocation_date)
             run_summary["daily_note_updated"] = True
-
-            if not backfill:
+            LOGGER.info(
+                "No papers cleared the selection threshold for announcement date %s; daily note marked with no-papers placeholder.",
+                announcement_date.isoformat(),
+            )
+            # Partial-match papers (e.g. dual_match failures) may still appear in
+            # weekly_interest even when nothing was selected — preserve them.
+            if weekly_interest_papers and not backfill:
                 existing_synthesis = note_manager.read_weekly_synthesis(note_date, reference_date=invocation_date)
-                weekly_additions = note_manager.preview_weekly_additions(
-                    note_date,
-                    successful_papers,
-                    reference_date=invocation_date,
-                )
-                synthesis = generation_service.generate_weekly_synthesis(
-                    existing_synthesis,
-                    weekly_additions,
-                    word_limit=_weekly_synthesis_word_limit(config, note_date),
-                    max_tokens=config.weekly_synthesis_max_tokens,
-                )
                 note_manager.update_weekly_note(
                     note_date,
-                    successful_papers,
-                    synthesis,
+                    [],
+                    existing_synthesis,
                     interest_papers=weekly_interest_papers,
                     reference_date=invocation_date,
                 )
                 run_summary["weekly_note_updated"] = True
-        elif weekly_interest_papers and not successful_papers and not backfill:
-            existing_synthesis = note_manager.read_weekly_synthesis(note_date, reference_date=invocation_date)
-            note_manager.update_weekly_note(
-                note_date,
-                [],
-                existing_synthesis,
-                interest_papers=weekly_interest_papers,
-                reference_date=invocation_date,
-            )
-            run_summary["weekly_note_updated"] = True
-            LOGGER.info(
-                "No papers completed successfully for announcement date %s; weekly interest bullets were added without updating the daily note or synthesis.",
-                announcement_date.isoformat(),
-            )
+            successful_papers = []
+        elif not selected_papers:
+            # No candidates to process (all already completed or truly empty day).
+            successful_papers = []
         else:
-            LOGGER.info(
-                "No papers completed successfully for announcement date %s; daily and weekly summaries were left unchanged.",
-                announcement_date.isoformat(),
+            successful_papers = _process_selected_papers(
+                config,
+                state_store,
+                generation_service,
+                selected_papers=selected_papers,
+                run_summary=run_summary,
             )
+
+            if successful_papers:
+                note_manager.update_daily_note(note_date, successful_papers[0], reference_date=invocation_date)
+                run_summary["daily_note_updated"] = True
+
+                if not backfill:
+                    existing_synthesis = note_manager.read_weekly_synthesis(note_date, reference_date=invocation_date)
+                    weekly_additions = note_manager.preview_weekly_additions(
+                        note_date,
+                        successful_papers,
+                        reference_date=invocation_date,
+                    )
+                    synthesis = generation_service.generate_weekly_synthesis(
+                        existing_synthesis,
+                        weekly_additions,
+                        word_limit=_weekly_synthesis_word_limit(config, note_date),
+                        max_tokens=config.weekly_synthesis_max_tokens,
+                    )
+                    note_manager.update_weekly_note(
+                        note_date,
+                        successful_papers,
+                        synthesis,
+                        interest_papers=weekly_interest_papers,
+                        reference_date=invocation_date,
+                    )
+                    run_summary["weekly_note_updated"] = True
+            elif weekly_interest_papers and not backfill:
+                existing_synthesis = note_manager.read_weekly_synthesis(note_date, reference_date=invocation_date)
+                note_manager.update_weekly_note(
+                    note_date,
+                    [],
+                    existing_synthesis,
+                    interest_papers=weekly_interest_papers,
+                    reference_date=invocation_date,
+                )
+                run_summary["weekly_note_updated"] = True
+                LOGGER.info(
+                    "No papers completed successfully for announcement date %s; weekly interest bullets were added without updating the daily note or synthesis.",
+                    announcement_date.isoformat(),
+                )
+            else:
+                LOGGER.info(
+                    "No papers completed successfully for announcement date %s; daily and weekly summaries were left unchanged.",
+                    announcement_date.isoformat(),
+                )
 
         for processed_paper in successful_papers:
             identity = derive_identity(processed_paper.paper)
