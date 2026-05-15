@@ -428,8 +428,8 @@ def test_ranker_batches_candidates_and_merges_by_score(tmp_path) -> None:
         make_paper(arxiv_id="2603.40073", title="Batch Two D"),
     ]
     # batch_size=2: effective_max=3, ceil(4/3)=2 → [2, 2]
-    # After both batches a finalist re-ranking pass fires for papers scoring ≥50
-    # (min_selection_score-20), producing a third provider call.
+    # After both batches a finalist re-ranking pass fires for papers scoring ≥60
+    # (min_selection_score-10), producing a third provider call.
     provider = RecordingProvider(
         [
             json.dumps(
@@ -479,6 +479,91 @@ def test_ranker_batches_candidates_and_merges_by_score(tmp_path) -> None:
     ]
     assert [paper.title for paper in selection.selected_papers] == ["Batch Two Winner"]
     assert not any(r.score_filled for r in selection.ranked)
+
+
+def test_ranker_keeps_finalist_rerank_capped_papers_in_weekly_interest(tmp_path) -> None:
+    papers = [
+        make_paper(arxiv_id="2603.40080", title="Stable Dual Match"),
+        make_paper(arxiv_id="2603.40081", title="Reranked Science Only"),
+        make_paper(arxiv_id="2603.40082", title="Below Finalist"),
+    ]
+    provider = RecordingProvider(
+        [
+            json.dumps(
+                {
+                    "ranked_papers": [
+                        {
+                            "candidate_id": "arxiv:2603.40080",
+                            "score": 76,
+                            "science_match": True,
+                            "method_match": True,
+                            "rationale": "Matches both priority sections.",
+                        },
+                        {
+                            "candidate_id": "arxiv:2603.40081",
+                            "score": 75,
+                            "science_match": True,
+                            "method_match": True,
+                            "rationale": "Initially appears to match both sections.",
+                        },
+                    ]
+                }
+            ),
+            json.dumps(
+                {
+                    "ranked_papers": [
+                        {
+                            "candidate_id": "arxiv:2603.40082",
+                            "score": 20,
+                            "science_match": False,
+                            "method_match": False,
+                            "rationale": "Does not match either section.",
+                        }
+                    ]
+                }
+            ),
+            json.dumps(
+                {
+                    "ranked_papers": [
+                        {
+                            "candidate_id": "arxiv:2603.40080",
+                            "score": 92,
+                            "science_match": True,
+                            "method_match": True,
+                            "rationale": "Still matches both priority sections.",
+                        },
+                        {
+                            "candidate_id": "arxiv:2603.40081",
+                            "score": 95,
+                            "science_match": True,
+                            "method_match": False,
+                            "rationale": "Strong science topic but lacks the requested method angle.",
+                        },
+                    ]
+                }
+            ),
+        ]
+    )
+    ranker = PaperRanker(
+        provider=provider,
+        config=make_app_config(tmp_path).llm,
+        always_summarize_score=90.0,
+        min_selection_score=70.0,
+        batch_size=1,
+    )
+    preferences = PreferenceConfig(
+        priorities=("Little red dots", "Semi-analytic models"),
+        categories=("astro-ph.GA",),
+        science_priorities=("Little red dots",),
+        method_priorities=("Semi-analytic models",),
+    )
+
+    selection = ranker.rank_papers(preferences, papers)
+
+    assert len(provider.calls) == 3
+    assert [paper.title for paper in selection.selected_papers] == ["Stable Dual Match"]
+    assert [item.paper.title for item in selection.weekly_interest] == ["Reranked Science Only"]
+    assert selection.weekly_interest[0].score == 69.0
 
 
 def test_ranker_requires_full_ranked_list_after_repair(tmp_path) -> None:

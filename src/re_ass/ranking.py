@@ -491,6 +491,9 @@ class PaperRanker:
                 try:
                     re_ranked = self._rank_candidates_batch(preferences, finalist_papers, label="ranking-finalist")
                     if dual_match_required:
+                        for r in re_ranked:
+                            if (r.science_match is False or r.method_match is False) and r.score > 69.0:
+                                capped_keys.add(r.paper_key)
                         re_ranked = _apply_dual_match_cap(re_ranked)
                     re_ranked_by_key = {r.paper_key: r for r in re_ranked}
                     all_ranked = [re_ranked_by_key.get(r.paper_key, r) for r in all_ranked]
