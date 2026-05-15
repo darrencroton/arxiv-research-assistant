@@ -75,6 +75,7 @@ def test_openai_compatible_processes_chat_completion(monkeypatch: pytest.MonkeyP
         "api_key": "not-needed",
         "base_url": "http://127.0.0.1:1234/v1",
         "timeout": 3600.0,
+        "max_retries": 0,
     }
     assert clients[0].chat.completions.calls == [
         {

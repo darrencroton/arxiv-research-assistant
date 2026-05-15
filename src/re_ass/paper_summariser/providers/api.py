@@ -313,6 +313,7 @@ class OpenAICompatibleAPI(Provider):
             api_key=self.api_key or "not-needed",
             base_url=self.base_url,
             timeout=float(self.config.get("timeout", 300)),
+            max_retries=0,
         )
 
     def validate_runtime_ready(self):
