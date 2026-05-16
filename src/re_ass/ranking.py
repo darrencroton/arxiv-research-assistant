@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import dataclasses
 from dataclasses import dataclass
 import json
 import logging
@@ -171,15 +170,16 @@ def _ranking_user_prompt(preferences: PreferenceConfig, candidates: list[ArxivPa
             "- method_match is true only if the paper clearly matches at least one method priority.\n"
             "- More matches are better, but one direct science match plus one direct method match can still be a strong fit.\n"
             "- Earlier numbers within each priority matter more than later ones.\n"
-            "- Prefer conservative scoring: score 85+ only when the central result directly advances a science priority and the method is relevant to that same science question.\n"
+            "- Use the full score range; do not push clear daily-summary candidates below 85 just because they are not the single best paper.\n"
+            "- A paper should normally need both science_match and method_match true to score 85+.\n"
             "- Reserve 90+ for papers that clearly deserve one of the day's top 1-3 summary slots.\n"
             "- Score fit to the user's priorities, not general paper quality.\n"
         )
         scoring_guide = (
-            "- 90-100: strong dual fit — clear science match AND clear method match to high-ranked priorities\n"
-            "- 85-89: near-top dual fit — both matches are true and the paper may deserve rescue if few papers are stronger\n"
-            "- 70-84: dual fit — both science_match and method_match are true; at least one a real but lower-confidence hit\n"
-            "- 40-69: one-sided — only science_match OR only method_match is true; score must not exceed 69\n"
+            "- 90-100: strongest dual fits — clear science match AND clear method match to high-ranked priorities; obvious daily-summary candidates\n"
+            "- 85-89: clear dual fits — both matches are true and the paper is a plausible daily-summary candidate\n"
+            "- 70-84: relevant but not daily-summary fit — lower-confidence dual matches or important one-sided matches for weekly interest\n"
+            "- 40-69: partial, adjacent, or weakly connected fit\n"
             "- 0-39: weak fit — no clear match in either category\n"
         )
     else:
@@ -192,7 +192,7 @@ def _ranking_user_prompt(preferences: PreferenceConfig, candidates: list[ArxivPa
             "- Earlier priority numbers matter more than later ones.\n"
             "- A strong direct match to any single priority can deserve a high score.\n"
             "- Matching multiple priorities is a bonus, not a requirement.\n"
-            "- Prefer conservative scoring: score 85+ only when the central result directly advances a listed priority.\n"
+            "- Use the full score range; do not push clear daily-summary candidates below 85 just because they are not the single best paper.\n"
             "- Reserve 90+ for papers that clearly deserve one of the day's top 1-3 summary slots.\n"
             "- Score fit to the user's priorities, not general paper quality.\n"
         )
@@ -414,16 +414,6 @@ def _parse_ranked_payload(
 _BATCH_OVERFLOW_FRACTION = 0.2
 
 
-def _apply_dual_match_cap(ranked: list[RankedPaper]) -> list[RankedPaper]:
-    """Clamp one-sided papers to ≤69, enforcing the scoring guide regardless of model compliance."""
-    return [
-        dataclasses.replace(r, score=69.0)
-        if (r.science_match is False or r.method_match is False) and r.score > 69.0
-        else r
-        for r in ranked
-    ]
-
-
 def _split_into_batches(candidates: list[ArxivPaper], batch_size: int) -> list[list[ArxivPaper]]:
     """Split candidates into the fewest evenly-sized batches where each fits within batch_size + 20%."""
     n = len(candidates)
@@ -486,18 +476,11 @@ class PaperRanker:
             len(batches),
         )
         all_ranked: list[RankedPaper] = []
-        # Track papers whose scores were capped so weekly_interest can still surface them.
-        capped_keys: set[str] = set()
         for batch_index, batch in enumerate(batches, 1):
             if len(batches) > 1:
                 LOGGER.info("Ranking batch %s/%s (%s candidate(s)).", batch_index, len(batches), len(batch))
             batch_label = "ranking" if len(batches) == 1 else f"ranking-{batch_index:02d}"
             batch_ranked = self._rank_candidates_batch(preferences, batch, label=batch_label)
-            if dual_match_required:
-                for r in batch_ranked:
-                    if (r.science_match is False or r.method_match is False) and r.score > 69.0:
-                        capped_keys.add(r.paper_key)
-                batch_ranked = _apply_dual_match_cap(batch_ranked)
             all_ranked.extend(batch_ranked)
 
         if len(batches) > 1:
@@ -525,11 +508,6 @@ class PaperRanker:
                         label="ranking-finalist",
                         allow_split_recovery=False,
                     )
-                    if dual_match_required:
-                        for r in re_ranked:
-                            if (r.science_match is False or r.method_match is False) and r.score > 69.0:
-                                capped_keys.add(r.paper_key)
-                        re_ranked = _apply_dual_match_cap(re_ranked)
                     re_ranked_by_key = {r.paper_key: r for r in re_ranked}
                     all_ranked = [re_ranked_by_key.get(r.paper_key, r) for r in all_ranked]
                 except RankingError as error:
@@ -563,13 +541,11 @@ class PaperRanker:
         remaining_slots = 0 if always_selected else _ABOVE_MIN_FILL_COUNT
         selected = always_selected + near_top_rescue + fill_candidates[:remaining_slots]
         selected_keys = {item.paper_key for item in selected}
-        # Use score-only threshold for weekly interest so that partial-match papers
-        # (science-only or method-only) are not silently excluded when dual_match is
-        # required for selection. Capped papers are included regardless of their clamped
-        # score, since the cap is a selection guard, not a signal that the paper is uninteresting.
+        # Use score-only threshold for weekly interest so partial-match papers
+        # remain visible even when dual_match is required for daily selection.
         weekly_interest = [
             item for item in ranked
-            if (item.score >= self.min_selection_score or item.paper_key in capped_keys)
+            if item.score >= self.min_selection_score
             and item.paper_key not in selected_keys
         ]
         LOGGER.info(

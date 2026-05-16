@@ -139,8 +139,9 @@ def test_ranker_requires_science_and_method_matches_when_sections_are_present(tm
     prompt = provider.calls[0]["user_prompt"]
     assert "<science_priorities>" in prompt
     assert "<method_priorities>" in prompt
-    assert "score must not exceed 69" in prompt
-    assert "score 85+ only when the central result directly advances a science priority" in prompt
+    assert "do not push clear daily-summary candidates below 85" in prompt
+    assert "A paper should normally need both science_match and method_match true to score 85+" in prompt
+    assert "85-89: clear dual fits" in prompt
     assert "Reserve 90+ for papers that clearly deserve one of the day's top 1-3 summary slots" in prompt
     assert '"science_match":true' in prompt
 
@@ -606,7 +607,7 @@ def test_ranker_batches_candidates_and_merges_by_score(tmp_path) -> None:
     assert not any(r.score_filled for r in selection.ranked)
 
 
-def test_ranker_keeps_finalist_rerank_capped_papers_in_weekly_interest(tmp_path) -> None:
+def test_ranker_keeps_finalist_rerank_one_sided_papers_in_weekly_interest(tmp_path) -> None:
     papers = [
         make_paper(arxiv_id="2603.40080", title="Stable Dual Match"),
         make_paper(arxiv_id="2603.40081", title="Reranked Science Only"),
@@ -688,7 +689,7 @@ def test_ranker_keeps_finalist_rerank_capped_papers_in_weekly_interest(tmp_path)
     assert len(provider.calls) == 3
     assert [paper.title for paper in selection.selected_papers] == ["Stable Dual Match"]
     assert [item.paper.title for item in selection.weekly_interest] == ["Reranked Science Only"]
-    assert selection.weekly_interest[0].score == 69.0
+    assert selection.weekly_interest[0].score == 95.0
 
 
 def test_ranker_retries_invalid_payloads_before_failing(tmp_path) -> None:

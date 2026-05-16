@@ -145,3 +145,94 @@ Treat the change as a genuine improvement if most of the following are true:
 Treat the change as inconclusive if the new week is scientifically very different, candidate pools diverge, or Sonnet itself shows high variance.
 
 Treat the change as a regression if the rescue slot commonly selects weak papers, if `85-89` becomes noisy, or if daily summary volume becomes overwhelming.
+
+## Follow-up after archived `minmax-5`
+
+The next completed local run was archived under:
+
+- `~/Documents/AI Tools/private/re-ass-tests/archive/minmax-5`
+
+Post-change report written outside the repo:
+
+- `~/Desktop/re-ass-minimax-local-selection-postchange-2026-05-11_to_2026-05-14.md`
+- `~/Desktop/re-ass-minimax-scoring-cause-review-2026-05-16.md`
+
+The `minmax-5` run improved the visible top-paper match but did not solve
+selection recall:
+
+- Candidate parity remained perfect and reliability stayed clean.
+- Top-paper agreement with Sonnet was `4/4`.
+- Local selected counts were `1, 1, 1, 1`, compared with Sonnet's `1, 2, 2, 2`.
+- The rescue slot did not meaningfully fire because most missed secondary papers
+  scored below `85`.
+- Several obvious dual matches were marked as dual matches but scored in the
+  prompt's `70-84` band, for example Lu `83`, Lin `79`, Huang `78`, and FLARES
+  `82`.
+- Some misses were boolean-gate failures rather than pure scoring failures:
+  Varnava ended `science_match=true, method_match=false`, and ASTRID/LSST ended
+  `science_match=false, method_match=true`.
+
+Interpretation:
+
+- The main issue was not summary quality and probably not inability to compare
+  the top candidates.
+- The biggest influence was prompt/selector mismatch: the prompt described
+  `70-84` as a valid dual-fit band, while the selector treats `70-84` as weekly
+  interest except for one quiet-day fallback.
+- The hard one-sided score cap to `69` made boolean mistakes look like low model
+  confidence and made near-miss diagnostics harder.
+- The preference rewrite reduced noisy over-selection, but likely over-suppressed
+  some simulation/survey products, especially ASTRID/LSST-style mock-catalogue or
+  luminosity-function papers.
+
+## Second calibration update
+
+The next iteration keeps the approach simple and avoids adding a large decision
+tree.
+
+### Prompt scoring bands
+
+The ranking prompt now aligns score bands with selection behavior:
+
+- `90-100`: strongest dual fits and obvious daily-summary candidates.
+- `85-89`: clear dual fits that are plausible daily-summary candidates.
+- `70-84`: relevant but not daily-summary fits, including lower-confidence dual
+  matches or important one-sided matches for weekly interest.
+- `40-69`: partial, adjacent, or weakly connected fits.
+- `0-39`: weak fits.
+
+The prompt no longer says to "prefer conservative scoring". It instead says to
+use the full score range and not push clear daily-summary candidates below `85`
+just because they are not the single best paper.
+
+### Score preservation for one-sided papers
+
+The selector still requires dual science and method matches for daily selection
+when both priority sections are present.
+
+However, it no longer mutates one-sided high scores down to `69`. Raw scores are
+preserved for ranking diagnostics and weekly-interest visibility. This keeps the
+selection guard while making false boolean decisions easier to identify.
+
+### Simulation and survey preference clarification
+
+The active preferences and tracked defaults now clarify that simulation or
+survey products are strong method matches when they deliver calibrated galaxy
+luminosity functions, mock catalogues, clustering measurements, or model
+benchmarks used to test galaxy evolution.
+
+Expected effect:
+
+- Strong dual-match papers should move from `70-84` into `85+` more often.
+- False one-sided classifications should remain visible as high-scoring
+  diagnostic misses instead of being hidden at `69`.
+- ASTRID/LSST-like papers should be less likely to be treated as method-only
+  infrastructure.
+
+Watch-outs for the next run:
+
+- If `85+` becomes noisy again, the prompt calibration went too far.
+- If selected counts remain `1, 1, 1, 1`, the selector may need one narrow
+  top-two dual-match fallback.
+- If selected counts jump to many papers per day, keep the prompt but tighten the
+  selector rather than adding more preference text.
