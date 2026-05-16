@@ -13,11 +13,11 @@ The goal is not to overfit one week of scores. The goal is to make the local mod
 
 The prior assessment is copied into:
 
-- `docs/ab-test-minimax-vs-sonnet-baseline-2026-05-11_to_2026-05-14.md`
+- `~/Documents/AI Tools/private/re-ass-tests/archive/minmax-4/ab-test-minimax-vs-sonnet-baseline-2026-05-11_to_2026-05-14.md`
 
 The generated compare report from that run is:
 
-- `docs/ab-test-local-2026-05-11_to_2026-05-14.md`
+- `~/Documents/AI Tools/private/re-ass-tests/archive/minmax-4/ab-test-local-2026-05-11_to_2026-05-14.md`
 
 Baseline summary:
 
@@ -154,8 +154,8 @@ The next completed local run was archived under:
 
 Post-change report written outside the repo:
 
-- `~/Desktop/re-ass-minimax-local-selection-postchange-2026-05-11_to_2026-05-14.md`
-- `~/Desktop/re-ass-minimax-scoring-cause-review-2026-05-16.md`
+- `~/Documents/AI Tools/private/re-ass-tests/archive/minmax-5/re-ass-minimax-local-selection-postchange-2026-05-11_to_2026-05-14.md`
+- `~/Documents/AI Tools/private/re-ass-tests/archive/minmax-5/re-ass-minimax-scoring-cause-review-2026-05-16.md`
 
 The `minmax-5` run improved the visible top-paper match but did not solve
 selection recall:
