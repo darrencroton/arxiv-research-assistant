@@ -12,6 +12,7 @@ from re_ass.generation_service import GenerationService
 from re_ass.models import ArxivPaper, ProcessedPaper
 from re_ass.note_manager import NoteManager
 from re_ass.paper_identity import PaperIdentity, derive_identity
+from re_ass.paper_summariser.service import log_summary_text_quality_warnings
 from re_ass.preferences import load_preferences
 from re_ass.prompt_logger import PromptLogger
 from re_ass.ranking import PaperRanker, RankingError
@@ -299,6 +300,7 @@ def _process_selected_papers(
                 note_content = generation_service.build_paper_note_content(paper, staged_pdf_path)
                 staged_note_path = temp_dir / identity.note_filename
                 staged_note_path.write_text(note_content, encoding="utf-8")
+                log_summary_text_quality_warnings(note_content, staged_note_path)
 
                 final_pdf_path = config.pdfs_dir / identity.pdf_filename
                 _replace_file(staged_pdf_path, final_pdf_path)

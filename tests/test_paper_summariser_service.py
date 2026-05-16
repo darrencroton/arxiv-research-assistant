@@ -17,6 +17,7 @@ from re_ass.paper_summariser.service import (
     create_system_prompt,
     create_user_prompt,
     filter_keywords_for_categories,
+    find_summary_text_quality_warnings,
     fit_prompt_to_provider_budget,
     insert_section,
     normalise_extracted_text,
@@ -82,6 +83,19 @@ def _glossary_section() -> str:
         "|---|---|\n"
         "| **Inference** | A method for estimating model parameters from data. |"
     )
+
+
+def test_summary_text_quality_warnings_find_common_local_model_blemishes() -> None:
+    summary = (
+        "# Paper\n\n"
+        "- A claim about constraints onIMF universality.[^1]\n"
+        "| **CHIMES** | An non-equilibrium chemistry module. |\n"
+        '[^1]: "To constraindiffusion, we use abundances." (Section 1, p.1)\n'
+    )
+
+    warnings = find_summary_text_quality_warnings(summary)
+
+    assert {warning[2] for warning in warnings} == {"onIMF", "An non-equilibrium", "constraindiffusion"}
 
 
 def test_summarise_source_uses_extracted_text(tmp_path: Path) -> None:

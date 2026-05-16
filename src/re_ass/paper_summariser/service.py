@@ -837,6 +837,7 @@ def call_llm_with_retry(
 ) -> str:
     last_error: Exception | None = None
     for attempt in range(max_retries):
+        started_at = time.monotonic()
         try:
             LOGGER.info("Attempt %s/%s calling LLM...", attempt + 1, max_retries)
             summary = provider.process_document(
@@ -852,13 +853,16 @@ def call_llm_with_retry(
                 raise ValueError("Summary has inline footnote markers but is missing the ## References section")
             if response_validator is not None:
                 response_validator(summary)
-            LOGGER.info("LLM call successful (received ~%s chars)", len(summary))
+            elapsed = time.monotonic() - started_at
+            LOGGER.info("LLM call successful in %.1fs (received ~%s chars)", elapsed, len(summary))
             return summary
         except Exception as error:
             last_error = error
+            elapsed = time.monotonic() - started_at
             LOGGER.error(
-                "Attempt %s failed — %s: %s",
+                "Attempt %s failed after %.1fs — %s: %s",
                 attempt + 1,
+                elapsed,
                 provider.__class__.__name__,
                 error,
             )
@@ -883,6 +887,7 @@ def call_glossary_llm_with_retry(
     last_error: Exception | None = None
     last_candidate = ""
     for attempt in range(max_retries):
+        started_at = time.monotonic()
         try:
             LOGGER.info("Attempt %s/%s calling LLM...", attempt + 1, max_retries)
             section = provider.process_document(
@@ -898,13 +903,16 @@ def call_glossary_llm_with_retry(
             if _INLINE_FOOTNOTE_RE.search(section) and not _REFERENCES_HEADING_RE.search(section):
                 raise ValueError("Summary has inline footnote markers but is missing the ## References section")
             validate_glossary_section(section)
-            LOGGER.info("LLM call successful (received ~%s chars)", len(section))
+            elapsed = time.monotonic() - started_at
+            LOGGER.info("LLM call successful in %.1fs (received ~%s chars)", elapsed, len(section))
             return _normalise_generated_section(section, "## Glossary")
         except Exception as error:
             last_error = error
+            elapsed = time.monotonic() - started_at
             LOGGER.error(
-                "Attempt %s failed — %s: %s",
+                "Attempt %s failed after %.1fs — %s: %s",
                 attempt + 1,
+                elapsed,
                 provider.__class__.__name__,
                 error,
             )
@@ -1096,6 +1104,53 @@ def validate_tags_section(
         available_keywords,
         reject_unknown_science_tags=reject_unknown_science_tags,
     )
+
+
+_SUMMARY_TEXT_QUALITY_CHECKS = (
+    (
+        "common word joined to acronym",
+        re.compile(r"\b(?:a|an|and|as|at|by|for|from|in|of|on|or|the|to|with)[A-Z]{2,}[A-Za-z0-9]*\b"),
+    ),
+    ("bad article before non-", re.compile(r"\b[Aa]n\s+non[-A-Za-z0-9]*\b")),
+    ("known joined extraction artefact", re.compile(r"\bconstraindiffusion\b", re.IGNORECASE)),
+)
+
+
+def find_summary_text_quality_warnings(summary_content: str) -> list[tuple[str, int, str, str]]:
+    """Return lightweight text-quality warnings for common local-model blemishes."""
+    warnings: list[tuple[str, int, str, str]] = []
+    for label, pattern in _SUMMARY_TEXT_QUALITY_CHECKS:
+        for match in pattern.finditer(summary_content):
+            line_number = summary_content.count("\n", 0, match.start()) + 1
+            line_start = summary_content.rfind("\n", 0, match.start()) + 1
+            line_end = summary_content.find("\n", match.end())
+            if line_end == -1:
+                line_end = len(summary_content)
+            snippet = summary_content[line_start:line_end].strip()
+            warnings.append((label, line_number, match.group(0), snippet))
+    return warnings
+
+
+def log_summary_text_quality_warnings(summary_content: str, summary_path: Path | None = None) -> None:
+    """Warn about suspicious text artefacts without blocking a completed summary."""
+    warnings = find_summary_text_quality_warnings(summary_content)
+    if not warnings:
+        return
+
+    location = f" in {summary_path}" if summary_path else ""
+    LOGGER.warning(
+        "Summary%s has %d possible text-quality issue(s); review the saved markdown.",
+        location,
+        len(warnings),
+    )
+    for label, line_number, match_text, snippet in warnings[:5]:
+        LOGGER.warning(
+            "Possible %s at line %d (%r): %s",
+            label,
+            line_number,
+            match_text,
+            snippet[:200],
+        )
 
 
 def build_glossary_prompt(summary_text: str) -> tuple[str, str]:

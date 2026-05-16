@@ -90,6 +90,16 @@ def test_openai_compatible_processes_chat_completion(monkeypatch: pytest.MonkeyP
     ]
 
 
+def test_openai_compatible_logs_finish_reason(monkeypatch: pytest.MonkeyPatch, caplog) -> None:
+    monkeypatch.setattr("openai.OpenAI", lambda **kwargs: FakeOpenAIClient(**kwargs))
+    provider = OpenAICompatibleAPI({"model": "local-model", "base_url": "http://127.0.0.1:1234/v1"})
+
+    with caplog.at_level(logging.INFO, logger="re_ass.paper_summariser.providers.api"):
+        provider.process_document("", False, "system prompt", "user prompt", max_tokens=4096)
+
+    assert any("finish_reason=stop" in record.message for record in caplog.records)
+
+
 def test_openai_compatible_warns_when_response_is_truncated(monkeypatch: pytest.MonkeyPatch, caplog) -> None:
     def fake_openai_client(**kwargs):
         client = FakeOpenAIClient(**kwargs)

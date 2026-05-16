@@ -288,9 +288,14 @@ class OpenAICompatibleAPI(Provider):
     """
 
     default_context_size = 128_000
+    default_timeout = 3600
 
     def supports_direct_pdf(self):
         return False
+
+    def _get_timeout(self) -> float:
+        """Return the request timeout for long-running local inference."""
+        return float(self.config.get("timeout") or self.default_timeout)
 
     def setup(self):
         """Initialise an OpenAI client pointed at a configured compatible endpoint."""
@@ -312,13 +317,13 @@ class OpenAICompatibleAPI(Provider):
         self.client = openai.OpenAI(
             api_key=self.api_key or "not-needed",
             base_url=self.base_url,
-            timeout=float(self.config.get("timeout", 300)),
+            timeout=self._get_timeout(),
             max_retries=0,
         )
 
     def validate_runtime_ready(self):
         """Check that the configured endpoint is reachable before a full run starts."""
-        timeout = min(float(self.config.get("timeout", 300)), 15.0)
+        timeout = min(self._get_timeout(), 15.0)
         headers = {}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -352,7 +357,9 @@ class OpenAICompatibleAPI(Provider):
             max_tokens=max_tokens,
         )
         choice = response.choices[0]
-        if choice.finish_reason == "length":
+        finish_reason = getattr(choice, "finish_reason", None)
+        LOGGER.info("OpenAI-compatible API response finish_reason=%s", finish_reason)
+        if finish_reason == "length":
             LOGGER.warning(
                 "OpenAI-compatible API response hit the token limit (finish_reason=length, max_tokens=%d); "
                 "output may be truncated mid-sentence.",
