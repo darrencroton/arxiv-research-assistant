@@ -716,7 +716,6 @@ def _resolve_variant_paths(name: str, settings_path: Path) -> VariantPaths:
         arxiv_thresholds={
             "always_summarize_score": arxiv_cfg.get("always_summarize_score", 85),
             "min_selection_score": arxiv_cfg.get("min_selection_score", 70),
-            "max_papers": arxiv_cfg.get("max_papers", 1),
         },
         weekly_synthesis_heading=str(notes.get("weekly_synthesis_heading", "## SYNTHESIS")),
         weekly_synthesis_target=band,
@@ -1191,24 +1190,21 @@ def _section_threshold_discipline(
         "### Threshold discipline",
         "",
         "How many papers each side pushed into the `always_summarize_score` and "
-        "`min_selection_score` bands. A variant that consistently lands more papers "
-        "in the always-summarize band than the configured `max_papers` is rewarding "
-        "multi-match papers too aggressively (cost the user notices: more "
-        "summaries-per-day than expected).",
+        "`min_selection_score` bands. All papers clearing `always_summarize_score` "
+        "are always included — there is no cap on this band. A healthy run has 0–1 "
+        "papers in the always-summarize band; consistently 2+ suggests score "
+        "inflation on borderline papers rather than a misconfiguration.",
         "",
     ]
     always = float(variant_paths.arxiv_thresholds.get("always_summarize_score", 85))
     minsel = float(variant_paths.arxiv_thresholds.get("min_selection_score", 70))
-    max_papers = int(variant_paths.arxiv_thresholds.get("max_papers", 1) or 0)
-    out.append(f"  thresholds: always_summarize_score={always} min_selection_score={minsel} max_papers={max_papers}")
+    out.append(f"  thresholds: always_summarize_score={always} min_selection_score={minsel}")
     for label, run in (("benchmark", bench), (variant_paths.name, variant)):
         rr = run.get("ranking_results") or []
         n_always = sum(1 for x in rr if (x.get("score") or 0) >= always)
         n_minsel = sum(1 for x in rr if (x.get("score") or 0) >= minsel)
         selected = len(run.get("selected_paper_keys") or [])
-        flag = ""
-        if max_papers and n_always > max_papers:
-            flag = " ⚠ exceeds max_papers via always-summarize fill"
+        flag = " ⚠ score inflation — check whether always-summarize papers are genuinely on-priority" if n_always >= 2 else ""
         out.append(f"- **{label}**: ≥{always}: {n_always} | ≥{minsel}: {n_minsel} | selected: {selected}{flag}")
     out.append("")
     return out
@@ -1218,9 +1214,9 @@ def _section_topn_overlap(bench: dict[str, Any], variant: dict[str, Any], name: 
     """Top-N agreement is a more honest signal than selection overlap.
 
     Selection overlap can be 0 between two providers who agree to within a
-    few points on the top-3 ranking, simply because `max_papers = 1`. Top-N
-    overlap captures the underlying agreement: are they reading the same
-    pool of papers as "interesting"?
+    few points on the top-3 ranking but happen to straddle the always_summarize
+    threshold. Top-N overlap captures the underlying agreement: are they reading
+    the same pool of papers as "interesting"?
     """
     bench_top = _topn_keys(bench.get("ranking_results") or [], n=10)
     variant_top = _topn_keys(variant.get("ranking_results") or [], n=10)
