@@ -24,6 +24,12 @@ _MIN_RECOVERY_BATCH_SIZE = 10
 # When no paper clears always_summarize_score, take this many from the top of the
 # above-min_selection_score pool so the daily note is never silently blank.
 _ABOVE_MIN_FILL_COUNT = 1
+# When top-band papers exist, rescue at most one near-miss from just below the
+# top threshold. This absorbs score variance without turning the daily note into
+# a long reading list.
+_NEAR_TOP_RESCUE_BAND = 5.0
+_NEAR_TOP_RESCUE_COUNT = 1
+_NEAR_TOP_RESCUE_RANK_LIMIT = 3
 
 
 class RankingError(RuntimeError):
@@ -165,11 +171,14 @@ def _ranking_user_prompt(preferences: PreferenceConfig, candidates: list[ArxivPa
             "- method_match is true only if the paper clearly matches at least one method priority.\n"
             "- More matches are better, but one direct science match plus one direct method match can still be a strong fit.\n"
             "- Earlier numbers within each priority matter more than later ones.\n"
+            "- Prefer conservative scoring: score 85+ only when the central result directly advances a science priority and the method is relevant to that same science question.\n"
+            "- Reserve 90+ for papers that clearly deserve one of the day's top 1-3 summary slots.\n"
             "- Score fit to the user's priorities, not general paper quality.\n"
         )
         scoring_guide = (
             "- 90-100: strong dual fit — clear science match AND clear method match to high-ranked priorities\n"
-            "- 70-89: dual fit — both science_match and method_match are true; at least one a strong hit\n"
+            "- 85-89: near-top dual fit — both matches are true and the paper may deserve rescue if few papers are stronger\n"
+            "- 70-84: dual fit — both science_match and method_match are true; at least one a real but lower-confidence hit\n"
             "- 40-69: one-sided — only science_match OR only method_match is true; score must not exceed 69\n"
             "- 0-39: weak fit — no clear match in either category\n"
         )
@@ -183,12 +192,14 @@ def _ranking_user_prompt(preferences: PreferenceConfig, candidates: list[ArxivPa
             "- Earlier priority numbers matter more than later ones.\n"
             "- A strong direct match to any single priority can deserve a high score.\n"
             "- Matching multiple priorities is a bonus, not a requirement.\n"
+            "- Prefer conservative scoring: score 85+ only when the central result directly advances a listed priority.\n"
+            "- Reserve 90+ for papers that clearly deserve one of the day's top 1-3 summary slots.\n"
             "- Score fit to the user's priorities, not general paper quality.\n"
         )
         scoring_guide = (
             "- 90-100: exceptionally strong direct fit to at least one priority, especially a higher-ranked one\n"
-            "- 80-89: clear keep; strong direct fit to one priority even without multiple hits\n"
-            "- 60-79: partial, indirect, or weaker fit\n"
+            "- 85-89: near-top fit; strong direct fit that may deserve rescue if few papers are stronger\n"
+            "- 60-84: partial, indirect, or weaker fit\n"
             "- 0-59: weak fit\n"
         )
     return (
@@ -536,8 +547,21 @@ class PaperRanker:
         ]
         always_selected = [item for item in eligible if item.score >= self.always_summarize_score]
         fill_candidates = [item for item in eligible if item.score < self.always_summarize_score]
+        near_top_floor = max(self.min_selection_score, self.always_summarize_score - _NEAR_TOP_RESCUE_BAND)
+        if always_selected and dual_match_required:
+            near_top_rescue = [
+                item
+                for index, item in enumerate(ranked)
+                if index < _NEAR_TOP_RESCUE_RANK_LIMIT
+                and item.score >= near_top_floor
+                and item.score < self.always_summarize_score
+                and item.science_match is True
+                and item.method_match is True
+            ][: _NEAR_TOP_RESCUE_COUNT]
+        else:
+            near_top_rescue = []
         remaining_slots = 0 if always_selected else _ABOVE_MIN_FILL_COUNT
-        selected = always_selected + fill_candidates[:remaining_slots]
+        selected = always_selected + near_top_rescue + fill_candidates[:remaining_slots]
         selected_keys = {item.paper_key for item in selected}
         # Use score-only threshold for weekly interest so that partial-match papers
         # (science-only or method-only) are not silently excluded when dual_match is
@@ -549,10 +573,12 @@ class PaperRanker:
             and item.paper_key not in selected_keys
         ]
         LOGGER.info(
-            "Ranked %s candidate(s): selected=%s always_threshold=%s interest_threshold=%s above_min_fill=%s weekly_interest=%s dual_match_required=%s",
+            "Ranked %s candidate(s): selected=%s always_threshold=%s near_top_floor=%s near_top_rescue=%s interest_threshold=%s above_min_fill=%s weekly_interest=%s dual_match_required=%s",
             len(candidates),
             len(selected),
             self.always_summarize_score,
+            near_top_floor,
+            len(near_top_rescue),
             self.min_selection_score,
             _ABOVE_MIN_FILL_COUNT,
             len(weekly_interest),

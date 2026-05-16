@@ -140,6 +140,8 @@ def test_ranker_requires_science_and_method_matches_when_sections_are_present(tm
     assert "<science_priorities>" in prompt
     assert "<method_priorities>" in prompt
     assert "score must not exceed 69" in prompt
+    assert "score 85+ only when the central result directly advances a science priority" in prompt
+    assert "Reserve 90+ for papers that clearly deserve one of the day's top 1-3 summary slots" in prompt
     assert '"science_match":true' in prompt
 
 
@@ -269,6 +271,130 @@ def test_ranker_keeps_all_top_band_papers_regardless_of_count(tmp_path) -> None:
 
     assert [paper.title for paper in selection.selected_papers] == ["Top Fit One", "Top Fit Two", "Top Fit Three"]
     assert [item.paper.title for item in selection.weekly_interest] == ["Mid Fit"]
+
+
+def test_ranker_rescues_one_near_top_dual_match_when_top_papers_exist(tmp_path) -> None:
+    papers = [
+        make_paper(arxiv_id="2603.40110", title="Always Keep"),
+        make_paper(arxiv_id="2603.40111", title="Near Top Rescue"),
+        make_paper(arxiv_id="2603.40112", title="Second Near Top"),
+        make_paper(arxiv_id="2603.40113", title="Interest Only"),
+    ]
+    provider = RecordingProvider(
+        json.dumps(
+            {
+                "ranked_papers": [
+                    {
+                        "candidate_id": "arxiv:2603.40110",
+                        "score": 94,
+                        "science_match": True,
+                        "method_match": True,
+                        "rationale": "Clearly top tier.",
+                    },
+                    {
+                        "candidate_id": "arxiv:2603.40111",
+                        "score": 88,
+                        "science_match": True,
+                        "method_match": True,
+                        "rationale": "Strong near-top dual match.",
+                    },
+                    {
+                        "candidate_id": "arxiv:2603.40112",
+                        "score": 87,
+                        "science_match": True,
+                        "method_match": True,
+                        "rationale": "Also a near-top dual match.",
+                    },
+                    {
+                        "candidate_id": "arxiv:2603.40113",
+                        "score": 75,
+                        "science_match": True,
+                        "method_match": True,
+                        "rationale": "Interesting but lower priority.",
+                    },
+                ]
+            }
+        )
+    )
+    ranker = PaperRanker(
+        provider=provider,
+        config=make_app_config(tmp_path).llm,
+        always_summarize_score=90.0,
+        min_selection_score=70.0,
+    )
+    preferences = PreferenceConfig(
+        priorities=("Galaxy evolution", "Hydrodynamical simulations"),
+        categories=("astro-ph.GA",),
+        science_priorities=("Galaxy evolution",),
+        method_priorities=("Hydrodynamical simulations",),
+    )
+
+    selection = ranker.rank_papers(preferences, papers)
+
+    assert [paper.title for paper in selection.selected_papers] == ["Always Keep", "Near Top Rescue"]
+    assert [item.paper.title for item in selection.weekly_interest] == ["Second Near Top", "Interest Only"]
+
+
+def test_ranker_does_not_rescue_near_top_dual_match_outside_top_three(tmp_path) -> None:
+    papers = [
+        make_paper(arxiv_id="2603.40120", title="Top Fit One"),
+        make_paper(arxiv_id="2603.40121", title="Top Fit Two"),
+        make_paper(arxiv_id="2603.40122", title="Top Fit Three"),
+        make_paper(arxiv_id="2603.40123", title="Near Top Fourth"),
+    ]
+    provider = RecordingProvider(
+        json.dumps(
+            {
+                "ranked_papers": [
+                    {
+                        "candidate_id": "arxiv:2603.40120",
+                        "score": 96,
+                        "science_match": True,
+                        "method_match": True,
+                        "rationale": "Top tier.",
+                    },
+                    {
+                        "candidate_id": "arxiv:2603.40121",
+                        "score": 94,
+                        "science_match": True,
+                        "method_match": True,
+                        "rationale": "Top tier.",
+                    },
+                    {
+                        "candidate_id": "arxiv:2603.40122",
+                        "score": 92,
+                        "science_match": True,
+                        "method_match": True,
+                        "rationale": "Top tier.",
+                    },
+                    {
+                        "candidate_id": "arxiv:2603.40123",
+                        "score": 88,
+                        "science_match": True,
+                        "method_match": True,
+                        "rationale": "Near-top but outside the top three.",
+                    },
+                ]
+            }
+        )
+    )
+    ranker = PaperRanker(
+        provider=provider,
+        config=make_app_config(tmp_path).llm,
+        always_summarize_score=90.0,
+        min_selection_score=70.0,
+    )
+    preferences = PreferenceConfig(
+        priorities=("Galaxy evolution", "Hydrodynamical simulations"),
+        categories=("astro-ph.GA",),
+        science_priorities=("Galaxy evolution",),
+        method_priorities=("Hydrodynamical simulations",),
+    )
+
+    selection = ranker.rank_papers(preferences, papers)
+
+    assert [paper.title for paper in selection.selected_papers] == ["Top Fit One", "Top Fit Two", "Top Fit Three"]
+    assert [item.paper.title for item in selection.weekly_interest] == ["Near Top Fourth"]
 
 
 def test_ranker_selects_always_band_and_overflows_mid_band_when_top_papers_exist(tmp_path) -> None:
