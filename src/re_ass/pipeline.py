@@ -38,13 +38,15 @@ def _weekly_synthesis_word_limit(config: AppConfig, note_date: date) -> int:
 def _ranking_summary(selection) -> list[dict[str, object]]:
     selected_keys = {item.paper_key for item in selection.selected}
     weekly_interest_keys = {item.paper_key for item in selection.weekly_interest}
-    results: list[dict[str, object]] = []
-    for item in selection.ranked:
-        result = _ranked_item_summary(item, include_published=True)
-        result["selected"] = item.paper_key in selected_keys
-        result["weekly_interest"] = item.paper_key in weekly_interest_keys
-        results.append(result)
-    return results
+    return [
+        _ranked_item_summary(
+            item,
+            include_published=True,
+            selected=item.paper_key in selected_keys,
+            weekly_interest=item.paper_key in weekly_interest_keys,
+        )
+        for item in selection.ranked
+    ]
 
 
 def _paper_keys(papers) -> list[str]:
@@ -55,22 +57,29 @@ def _ranked_items_summary(items) -> list[dict[str, object]]:
     return [_ranked_item_summary(item) for item in items]
 
 
-def _ranked_item_summary(item, *, include_published: bool = False) -> dict[str, object]:
-    result = {
-        "paper_key": item.paper_key,
-        "source_id": item.source_id,
-        "title": item.paper.title,
-        "score": item.score,
-        "rationale": item.rationale,
-    }
+def _ranked_item_summary(
+    item,
+    *,
+    include_published: bool = False,
+    selected: bool | None = None,
+    weekly_interest: bool | None = None,
+) -> dict[str, object]:
+    result: dict[str, object] = {"paper_key": item.paper_key, "source_id": item.source_id}
     if include_published:
         result["published"] = item.paper.published.isoformat()
+    result["title"] = item.paper.title
     if item.science_match is not None:
         result["science_match"] = item.science_match
     if item.method_match is not None:
         result["method_match"] = item.method_match
+    result["score"] = item.score
+    if selected is not None:
+        result["selected"] = selected
+    result["rationale"] = item.rationale
     if getattr(item, "score_filled", False):
         result["score_filled"] = True
+    if weekly_interest is not None:
+        result["weekly_interest"] = weekly_interest
     return result
 
 
