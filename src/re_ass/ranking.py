@@ -20,15 +20,9 @@ LOGGER = logging.getLogger(__name__)
 _RANKING_RETRY_WAIT_SECONDS = 2
 _MIN_RANKING_VALIDATION_ATTEMPTS = 4
 _MIN_RECOVERY_BATCH_SIZE = 10
-# When no paper clears always_summarize_score, take this many from the top of the
-# above-min_selection_score pool so the daily note is never silently blank.
-_ABOVE_MIN_FILL_COUNT = 1
-# When top-band papers exist, rescue at most one near-miss from just below the
-# top threshold. This absorbs score variance without turning the daily note into
-# a long reading list.
-_NEAR_TOP_RESCUE_BAND = 5.0
-_NEAR_TOP_RESCUE_COUNT = 1
-_NEAR_TOP_RESCUE_RANK_LIMIT = 3
+# If fewer than this many papers clear always_summarize_score, add the best
+# qualifying paper below the threshold so thin days still surface useful content.
+_TOP_UP_THRESHOLD = 2
 
 
 class RankingError(RuntimeError):
@@ -198,7 +192,7 @@ def _ranking_user_prompt(preferences: PreferenceConfig, candidates: list[ArxivPa
         )
         scoring_guide = (
             "- 90-100: exceptionally strong direct fit to at least one priority, especially a higher-ranked one\n"
-            "- 85-89: near-top fit; strong direct fit that may deserve rescue if few papers are stronger\n"
+            "- 85-89: strong direct fit that is a plausible daily-summary candidate\n"
             "- 60-84: partial, indirect, or weaker fit\n"
             "- 0-59: weak fit\n"
         )
@@ -525,21 +519,8 @@ class PaperRanker:
         ]
         always_selected = [item for item in eligible if item.score >= self.always_summarize_score]
         fill_candidates = [item for item in eligible if item.score < self.always_summarize_score]
-        near_top_floor = max(self.min_selection_score, self.always_summarize_score - _NEAR_TOP_RESCUE_BAND)
-        if always_selected and dual_match_required:
-            near_top_rescue = [
-                item
-                for index, item in enumerate(ranked)
-                if index < _NEAR_TOP_RESCUE_RANK_LIMIT
-                and item.score >= near_top_floor
-                and item.score < self.always_summarize_score
-                and item.science_match is True
-                and item.method_match is True
-            ][: _NEAR_TOP_RESCUE_COUNT]
-        else:
-            near_top_rescue = []
-        remaining_slots = 0 if always_selected else _ABOVE_MIN_FILL_COUNT
-        selected = always_selected + near_top_rescue + fill_candidates[:remaining_slots]
+        top_up = fill_candidates[:1] if len(always_selected) < _TOP_UP_THRESHOLD else []
+        selected = always_selected + top_up
         selected_keys = {item.paper_key for item in selected}
         # Use score-only threshold for weekly interest so partial-match papers
         # remain visible even when dual_match is required for daily selection.
@@ -549,14 +530,12 @@ class PaperRanker:
             and item.paper_key not in selected_keys
         ]
         LOGGER.info(
-            "Ranked %s candidate(s): selected=%s always_threshold=%s near_top_floor=%s near_top_rescue=%s interest_threshold=%s above_min_fill=%s weekly_interest=%s dual_match_required=%s",
+            "Ranked %s candidate(s): selected=%s always_threshold=%s top_up=%s interest_threshold=%s weekly_interest=%s dual_match_required=%s",
             len(candidates),
             len(selected),
             self.always_summarize_score,
-            near_top_floor,
-            len(near_top_rescue),
+            len(top_up),
             self.min_selection_score,
-            _ABOVE_MIN_FILL_COUNT,
             len(weekly_interest),
             dual_match_required,
         )

@@ -36,7 +36,7 @@ weekly_synthesis_word_limit_end = 200
 weekly_synthesis_max_tokens = 4096  # effective cap is min(this, [llm].max_output_tokens)
 
 [arxiv]
-always_summarize_score = 85
+always_summarize_score = 90
 min_selection_score = 70
 page_size = 100
 

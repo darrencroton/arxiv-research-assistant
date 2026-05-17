@@ -172,10 +172,10 @@ def test_ranker_filters_by_threshold(tmp_path) -> None:
 
     selection = ranker.rank_papers(_preferences("Agents"), papers)
 
-    # Strong Fit clears always_summarize_score → selected; Second Fit is mid-band but
-    # always_selected is non-empty so remaining_slots=0 → weekly_interest.
-    assert [paper.title for paper in selection.selected_papers] == ["Strong Fit"]
-    assert [item.paper.title for item in selection.weekly_interest] == ["Second Fit"]
+    # Strong Fit clears always_summarize_score → always_selected. Only one top-band
+    # paper, so top_up adds Second Fit. Weak Fit is below min_selection_score.
+    assert [paper.title for paper in selection.selected_papers] == ["Strong Fit", "Second Fit"]
+    assert [item.paper.title for item in selection.weekly_interest] == []
     assert [item.paper.title for item in selection.ranked] == ["Strong Fit", "Second Fit", "Weak Fit"]
 
 
@@ -208,7 +208,7 @@ def test_ranker_sorts_by_score_when_provider_returns_unsorted_payload(tmp_path) 
     assert [item.paper.title for item in selection.weekly_interest] == []
 
 
-def test_ranker_always_keeps_top_band_and_overflows_mid_band_to_weekly_interest(tmp_path) -> None:
+def test_ranker_tops_up_best_fill_when_only_one_top_band_paper(tmp_path) -> None:
     papers = [
         make_paper(arxiv_id="2603.40033", title="Exceptional Fit"),
         make_paper(arxiv_id="2603.40034", title="Strong Mid Fit"),
@@ -236,10 +236,11 @@ def test_ranker_always_keeps_top_band_and_overflows_mid_band_to_weekly_interest(
 
     selection = ranker.rank_papers(_preferences("Agents"), papers)
 
-    # Exceptional Fit clears always_summarize_score → always selected. Mid-band papers
-    # get remaining_slots=0 (always_selected is non-empty) → all overflow to weekly_interest.
-    assert [paper.title for paper in selection.selected_papers] == ["Exceptional Fit"]
-    assert [item.paper.title for item in selection.weekly_interest] == ["Strong Mid Fit", "Overflow Mid Fit"]
+    # Exceptional Fit clears always_summarize_score → always_selected. Only one top-band
+    # paper, so top_up adds the best fill candidate (Strong Mid Fit). Overflow Mid Fit
+    # and anything below min_selection_score remain in weekly_interest.
+    assert [paper.title for paper in selection.selected_papers] == ["Exceptional Fit", "Strong Mid Fit"]
+    assert [item.paper.title for item in selection.weekly_interest] == ["Overflow Mid Fit"]
 
 
 def test_ranker_keeps_all_top_band_papers_regardless_of_count(tmp_path) -> None:
@@ -274,7 +275,7 @@ def test_ranker_keeps_all_top_band_papers_regardless_of_count(tmp_path) -> None:
     assert [item.paper.title for item in selection.weekly_interest] == ["Mid Fit"]
 
 
-def test_ranker_rescues_one_near_top_dual_match_when_top_papers_exist(tmp_path) -> None:
+def test_ranker_tops_up_one_paper_when_exactly_one_in_top_band(tmp_path) -> None:
     papers = [
         make_paper(arxiv_id="2603.40110", title="Always Keep"),
         make_paper(arxiv_id="2603.40111", title="Near Top Rescue"),
@@ -332,11 +333,14 @@ def test_ranker_rescues_one_near_top_dual_match_when_top_papers_exist(tmp_path) 
 
     selection = ranker.rank_papers(preferences, papers)
 
+    # Always Keep clears always_summarize_score; only one top-band paper so top_up adds
+    # the best fill candidate (Near Top Rescue). Second Near Top and Interest Only remain
+    # in weekly_interest.
     assert [paper.title for paper in selection.selected_papers] == ["Always Keep", "Near Top Rescue"]
     assert [item.paper.title for item in selection.weekly_interest] == ["Second Near Top", "Interest Only"]
 
 
-def test_ranker_does_not_rescue_near_top_dual_match_outside_top_three(tmp_path) -> None:
+def test_ranker_does_not_top_up_when_two_or_more_top_band_papers_exist(tmp_path) -> None:
     papers = [
         make_paper(arxiv_id="2603.40120", title="Top Fit One"),
         make_paper(arxiv_id="2603.40121", title="Top Fit Two"),
@@ -394,11 +398,12 @@ def test_ranker_does_not_rescue_near_top_dual_match_outside_top_three(tmp_path) 
 
     selection = ranker.rank_papers(preferences, papers)
 
+    # Three top-band papers satisfy _TOP_UP_THRESHOLD so no top_up fires.
     assert [paper.title for paper in selection.selected_papers] == ["Top Fit One", "Top Fit Two", "Top Fit Three"]
     assert [item.paper.title for item in selection.weekly_interest] == ["Near Top Fourth"]
 
 
-def test_ranker_selects_always_band_and_overflows_mid_band_when_top_papers_exist(tmp_path) -> None:
+def test_ranker_tops_up_fill_when_one_top_band_paper(tmp_path) -> None:
     papers = [
         make_paper(arxiv_id="2603.40061", title="Always Keep"),
         make_paper(arxiv_id="2603.40062", title="Weekly Only"),
@@ -424,8 +429,10 @@ def test_ranker_selects_always_band_and_overflows_mid_band_when_top_papers_exist
 
     selection = ranker.rank_papers(_preferences("Agents"), papers)
 
-    assert [paper.title for paper in selection.selected_papers] == ["Always Keep"]
-    assert [item.paper.title for item in selection.weekly_interest] == ["Weekly Only"]
+    # Always Keep clears always_summarize_score; only one top-band paper so top_up
+    # adds Weekly Only. Below Threshold is under min_selection_score.
+    assert [paper.title for paper in selection.selected_papers] == ["Always Keep", "Weekly Only"]
+    assert [item.paper.title for item in selection.weekly_interest] == []
 
 
 def test_ranker_selects_one_fill_paper_when_no_top_band_papers_exist(tmp_path) -> None:
@@ -491,9 +498,10 @@ def test_ranker_repairs_invalid_payload_once(tmp_path) -> None:
 
     selection = ranker.rank_papers(_preferences("Agents"), papers)
 
-    # Paper One (97) is always-band; Paper Two (75) is mid-band but remaining_slots=0.
-    assert [paper.title for paper in selection.selected_papers] == ["Paper One"]
-    assert [item.paper.title for item in selection.weekly_interest] == ["Paper Two"]
+    # Paper One (97) clears always_summarize_score; only one top-band paper so top_up
+    # adds Paper Two (75).
+    assert [paper.title for paper in selection.selected_papers] == ["Paper One", "Paper Two"]
+    assert [item.paper.title for item in selection.weekly_interest] == []
     assert len(provider.calls) == 2
     assert "validation_error" in provider.calls[1]["user_prompt"]
 
@@ -603,7 +611,10 @@ def test_ranker_batches_candidates_and_merges_by_score(tmp_path) -> None:
         "Batch One B",
         "Batch Two D",
     ]
-    assert [paper.title for paper in selection.selected_papers] == ["Batch Two Winner"]
+    # Batch Two Winner (95) clears always_summarize_score; only one top-band paper so
+    # top_up adds Batch One A (72). Batch One B (55) and Batch Two D (40) are below
+    # min_selection_score.
+    assert [paper.title for paper in selection.selected_papers] == ["Batch Two Winner", "Batch One A"]
     assert not any(r.score_filled for r in selection.ranked)
 
 

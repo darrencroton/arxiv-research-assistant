@@ -187,12 +187,20 @@ Automatic runs are driven by arXiv announcement days, not by a rolling timestamp
 
 ## Ranking and Selection
 
-`re-ass` scores every fetched candidate against the priorities in `user_preferences/preferences.md`, always fully processes papers at or above `[arxiv].always_summarize_score`, and then fills up to `[arxiv].max_papers` full summaries with the next-best papers that still clear `[arxiv].min_selection_score`.
+`re-ass` scores every fetched candidate against the priorities in `user_preferences/preferences.md` in a single LLM pass, then applies deterministic selection in app code.
 
-If more papers clear `[arxiv].min_selection_score` than fit into the full-summary set, the overflow is still surfaced in the weekly note under that day's block as "Other papers of interest" with short author text and arXiv links.
-Set `[arxiv].max_papers = 0` to disable that lower-band fill while still surfacing qualifying papers as weekly bullets.
+When priorities are split into `## Priorities - Science` and `## Priorities - Methods` sections, a paper must match at least one science priority **and** at least one method priority to be selected for daily summaries. Papers that match only one section are still visible in the weekly note.
 
-The categories section controls which arXiv feeds are fetched in the first place. The priorities section then tells the ranker what counts as a strong match within that pool.
+**Daily selection:**
+
+- Papers scoring at or above `[arxiv].always_summarize_score` that meet the dual-match requirement are selected and fully summarised.
+- If fewer than two papers are selected, the next-best qualifying paper below the threshold is added as a top-up, so thin days still surface something useful.
+
+**Weekly interest:**
+
+- All papers scoring at or above `[arxiv].min_selection_score` that were not selected for a daily summary appear in the weekly note under that day's block as "Other papers of interest" with short rationales and arXiv links.
+
+The categories section controls which arXiv feeds are fetched. The priorities section tells the ranker what counts as a strong match within that pool.
 
 ## Templates and Obsidian
 

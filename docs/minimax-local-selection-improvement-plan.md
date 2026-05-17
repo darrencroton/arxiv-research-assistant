@@ -236,3 +236,29 @@ Watch-outs for the next run:
   top-two dual-match fallback.
 - If selected counts jump to many papers per day, keep the prompt but tighten the
   selector rather than adding more preference text.
+
+## Selector simplification — 2026-05-18
+
+After reviewing the first day with both providers on the second calibration update
+(`minmax-6`), the near-top rescue rule and the separate quiet-day fallback were
+merged into a single **top-up** rule and `always_summarize_score` was raised to
+`90` for both providers.
+
+**Selector as of 2026-05-18:**
+
+1. Papers scoring `≥ always_summarize_score` with dual match → daily summary.
+2. If fewer than two papers were selected, add the best qualifying paper below
+   the threshold (at most one).
+3. All papers scoring `≥ min_selection_score` not in the selected set → weekly
+   interest.
+
+The rescue rule was removed because it had not reliably fired across multiple
+runs, and the triggering condition (at least one top-band anchor required) was
+an unnecessary constraint that the unified "count < 2" threshold covers equally
+well. The top-3 rank constraint in the old rescue rule was dropped because the
+score already encodes relative rank; requiring both was redundant.
+
+The `always_summarize_score` change from `85` to `90` addresses Sonnet's
+over-selection on strong days (six papers on 2026-05-18 under the old threshold
+vs three under the new one). Equal thresholds also make provider comparisons
+cleaner.
