@@ -262,3 +262,29 @@ The `always_summarize_score` change from `85` to `90` addresses Sonnet's
 over-selection on strong days (six papers on 2026-05-18 under the old threshold
 vs three under the new one). Equal thresholds also make provider comparisons
 cleaner.
+
+## Finalist re-rank minimum pool — 2026-05-18
+
+After reviewing the `minmax-6` run across all four completed days (ann. 2026-05-11 to
+2026-05-14), the finalist re-rank was found to be a no-op in practice.
+
+**How the re-rank fires:** when the candidate pool is split across multiple batches,
+all papers scoring `≥ finalist_threshold` (= `min_selection_score - 10` = `60`) that
+also pass the dual-match gate are gathered into a single finalist pool and re-ranked
+together for cross-batch score calibration.
+
+**What actually happened:** typical pool sizes of 35–62 papers produced 1–2 batches
+and a dual-match finalist pool of 2–3 papers per batched day. Re-ranking 2–3 papers
+generates scores that differ only marginally from the first-pass values, and none of
+the post-rerank score shifts crossed the `90` or `70` thresholds that govern
+selection. The output was identical to what first-pass scores alone would have
+produced on all four assessed days.
+
+**Decision:** the re-rank code is preserved intact, but a minimum pool guard was
+added: the re-rank pass only fires when `len(finalist_papers) >= _FINALIST_RERANK_MIN_POOL`
+(currently `10`). With pools smaller than that, the cross-batch calibration signal is
+too weak to justify the extra LLM call.
+
+The threshold `10` was chosen as a conservative lower bound. If pool sizes grow — for
+example, with a much smaller `batch_size` or a significantly larger daily candidate
+count — the re-rank will fire automatically again without any code changes.

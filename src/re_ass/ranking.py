@@ -23,6 +23,9 @@ _MIN_RECOVERY_BATCH_SIZE = 10
 # If fewer than this many papers clear always_summarize_score, add the best
 # qualifying paper below the threshold so thin days still surface useful content.
 _TOP_UP_THRESHOLD = 2
+# Minimum finalist pool size to justify a re-rank pass; below this the pool is
+# too small for cross-batch calibration to add signal.
+_FINALIST_RERANK_MIN_POOL = 10
 
 
 class RankingError(RuntimeError):
@@ -489,7 +492,7 @@ class PaperRanker:
                 ]
             else:
                 finalist_papers = [r.paper for r in all_ranked if r.score >= finalist_threshold]
-            if len(finalist_papers) > 1:
+            if len(finalist_papers) >= _FINALIST_RERANK_MIN_POOL:
                 LOGGER.info(
                     "Re-ranking %s finalist(s) from %s batches for calibrated global ordering.",
                     len(finalist_papers),

@@ -562,8 +562,8 @@ def test_ranker_batches_candidates_and_merges_by_score(tmp_path) -> None:
         make_paper(arxiv_id="2603.40073", title="Batch Two D"),
     ]
     # batch_size=2: effective_max=3, ceil(4/3)=2 → [2, 2]
-    # After both batches a finalist re-ranking pass fires for papers scoring ≥60
-    # (min_selection_score-10), producing a third provider call.
+    # Only 3 papers score ≥ finalist threshold (60), which is below
+    # _FINALIST_RERANK_MIN_POOL (10), so no re-rank pass fires; exactly 2 provider calls.
     provider = RecordingProvider(
         [
             json.dumps(
@@ -582,16 +582,6 @@ def test_ranker_batches_candidates_and_merges_by_score(tmp_path) -> None:
                     ]
                 }
             ),
-            # Finalist re-ranking: the three papers that scored ≥50 get a calibrated pass.
-            json.dumps(
-                {
-                    "ranked_papers": [
-                        {"candidate_id": "arxiv:2603.40072", "score": 95, "rationale": "Excellent fit."},
-                        {"candidate_id": "arxiv:2603.40070", "score": 72, "rationale": "Good fit."},
-                        {"candidate_id": "arxiv:2603.40071", "score": 55, "rationale": "Partial fit."},
-                    ]
-                }
-            ),
         ]
     )
     ranker = PaperRanker(
@@ -604,7 +594,7 @@ def test_ranker_batches_candidates_and_merges_by_score(tmp_path) -> None:
 
     selection = ranker.rank_papers(_preferences("Agents"), papers)
 
-    assert len(provider.calls) == 3
+    assert len(provider.calls) == 2
     assert [item.paper.title for item in selection.ranked] == [
         "Batch Two Winner",
         "Batch One A",
@@ -612,16 +602,19 @@ def test_ranker_batches_candidates_and_merges_by_score(tmp_path) -> None:
         "Batch Two D",
     ]
     # Batch Two Winner (95) clears always_summarize_score; only one top-band paper so
-    # top_up adds Batch One A (72). Batch One B (55) and Batch Two D (40) are below
+    # top_up adds Batch One A (75). Batch One B (60) and Batch Two D (40) are below
     # min_selection_score.
     assert [paper.title for paper in selection.selected_papers] == ["Batch Two Winner", "Batch One A"]
     assert not any(r.score_filled for r in selection.ranked)
 
 
-def test_ranker_keeps_finalist_rerank_one_sided_papers_in_weekly_interest(tmp_path) -> None:
+def test_ranker_keeps_one_sided_papers_in_weekly_interest(tmp_path) -> None:
+    # Only 2 finalists qualify — below _FINALIST_RERANK_MIN_POOL (10) — so no re-rank
+    # fires. Science-only paper retains its first-pass score and appears in weekly
+    # interest rather than selected.
     papers = [
         make_paper(arxiv_id="2603.40080", title="Stable Dual Match"),
-        make_paper(arxiv_id="2603.40081", title="Reranked Science Only"),
+        make_paper(arxiv_id="2603.40081", title="Science Only"),
         make_paper(arxiv_id="2603.40082", title="Below Finalist"),
     ]
     provider = RecordingProvider(
@@ -640,8 +633,8 @@ def test_ranker_keeps_finalist_rerank_one_sided_papers_in_weekly_interest(tmp_pa
                             "candidate_id": "arxiv:2603.40081",
                             "score": 75,
                             "science_match": True,
-                            "method_match": True,
-                            "rationale": "Initially appears to match both sections.",
+                            "method_match": False,
+                            "rationale": "Strong science topic but lacks the requested method angle.",
                         },
                     ]
                 }
@@ -656,26 +649,6 @@ def test_ranker_keeps_finalist_rerank_one_sided_papers_in_weekly_interest(tmp_pa
                             "method_match": False,
                             "rationale": "Does not match either section.",
                         }
-                    ]
-                }
-            ),
-            json.dumps(
-                {
-                    "ranked_papers": [
-                        {
-                            "candidate_id": "arxiv:2603.40080",
-                            "score": 92,
-                            "science_match": True,
-                            "method_match": True,
-                            "rationale": "Still matches both priority sections.",
-                        },
-                        {
-                            "candidate_id": "arxiv:2603.40081",
-                            "score": 95,
-                            "science_match": True,
-                            "method_match": False,
-                            "rationale": "Strong science topic but lacks the requested method angle.",
-                        },
                     ]
                 }
             ),
@@ -697,10 +670,10 @@ def test_ranker_keeps_finalist_rerank_one_sided_papers_in_weekly_interest(tmp_pa
 
     selection = ranker.rank_papers(preferences, papers)
 
-    assert len(provider.calls) == 3
+    assert len(provider.calls) == 2
     assert [paper.title for paper in selection.selected_papers] == ["Stable Dual Match"]
-    assert [item.paper.title for item in selection.weekly_interest] == ["Reranked Science Only"]
-    assert selection.weekly_interest[0].score == 95.0
+    assert [item.paper.title for item in selection.weekly_interest] == ["Science Only"]
+    assert selection.weekly_interest[0].score == 75.0
 
 
 def test_ranker_retries_invalid_payloads_before_failing(tmp_path) -> None:
