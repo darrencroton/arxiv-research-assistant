@@ -47,6 +47,25 @@ def _seed_test_user_files(config: AppConfig) -> None:
 
 
 def make_app_config(tmp_path: Path, **overrides) -> AppConfig:
+    llm_cfg = LlmConfig(
+        mode="cli",
+        provider="claude",
+        model=None,
+        effort=None,
+        timeout_seconds=60,
+        max_output_tokens=12288,
+        max_prompt_chars=None,
+        temperature=0.2,
+        retry_attempts=3,
+        base_url=None,
+        api_key_env=None,
+        env_file=None,
+        download_timeout_seconds=120,
+        max_pdf_size_mb=100,
+        marker_timeout_seconds=300,
+        ollama_base_url="http://localhost:11434",
+        ranking_batch_size=0,
+    )
     config = AppConfig(
         output_root=tmp_path / "output",
         summaries_dir=tmp_path / "output" / "summaries",
@@ -76,25 +95,9 @@ def make_app_config(tmp_path: Path, **overrides) -> AppConfig:
         arxiv_page_size=50,
         always_summarize_score=90.0,
         min_selection_score=70.0,
-        llm=LlmConfig(
-            mode="cli",
-            provider="claude",
-            model=None,
-            effort=None,
-            timeout_seconds=60,
-            max_output_tokens=12288,
-            max_prompt_chars=None,
-            temperature=0.2,
-            retry_attempts=3,
-            base_url=None,
-            api_key_env=None,
-            env_file=None,
-            download_timeout_seconds=120,
-            max_pdf_size_mb=100,
-            marker_timeout_seconds=300,
-            ollama_base_url="http://localhost:11434",
-            ranking_batch_size=0,
-        ),
+        llm=llm_cfg,
+        ranking_llm=llm_cfg,
+        summary_llm=llm_cfg,
     )
     config = replace(config, **overrides)
     _seed_test_user_files(config)

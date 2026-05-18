@@ -73,7 +73,26 @@ def test_prepare_workspace_still_fails_for_existing_local_provider_config(tmp_pa
 
     monkeypatch.setattr("re_ass.setup.GenerationService", failing_generation_service)
 
-    with pytest.raises(ValueError, match="LLM provider validation failed for cli/claude: claude login missing"):
+    with pytest.raises(ValueError, match=r"LLM provider validation failed for summary \(cli/claude\): claude login missing"):
+        prepare_workspace(tmp_path)
+
+
+def test_prepare_workspace_reports_ranking_provider_validation_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _seed_defaults(tmp_path)
+    user_preferences_dir = tmp_path / "user_preferences"
+    user_preferences_dir.mkdir(exist_ok=True)
+    (user_preferences_dir / "settings.toml").write_text(
+        DEFAULT_SETTINGS
+        + "\n"
+        + "[llm-ranking]\n"
+        + 'provider = "copilot"\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("re_ass.setup.GenerationService", lambda **_kwargs: object())
+    monkeypatch.setattr("re_ass.setup.make_provider", lambda _config: (_ for _ in ()).throw(ValueError("copilot login missing")))
+
+    with pytest.raises(ValueError, match=r"LLM provider validation failed for ranking \(cli/copilot\): copilot login missing"):
         prepare_workspace(tmp_path)
 
 

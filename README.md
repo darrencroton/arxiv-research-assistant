@@ -38,7 +38,9 @@ This file controls:
 - `[preferences]`: which preferences file to read
 - `[notes]`: link style, weekly filename, rotation day, announcement-to-note date mapping, archive naming, and managed headings
 - `[arxiv]`: fetch limits, ranking thresholds, and the target number of full summaries
-- `[llm]`: provider mode, provider name, model, and optional reasoning effort
+- `[llm]`: provider mode, provider name, model, and optional reasoning effort — used for both ranking and summarisation by default
+- `[llm-ranking]` *(optional)*: override any `[llm]` field for ranking only; omitted fields inherit from `[llm]`
+- `[llm-summary]` *(optional)*: override any `[llm]` field for paper summarisation only; omitted fields inherit from `[llm]`
 
 Common provider setups:
 
@@ -79,6 +81,21 @@ provider = "copilot"
 model = "claude-sonnet-4.6"
 effort = "high"
 ```
+
+To use a cheaper or faster model for ranking while keeping a more capable model for full-paper summarisation, add an override section that only specifies the fields that differ:
+
+```toml
+[llm]
+mode = "api"
+provider = "openai-compatible"
+model = "claude-opus-4-7"
+base_url = "http://127.0.0.1:1234/v1"
+
+[llm-ranking]
+model = "qwen2.5-coder-32b-instruct"
+```
+
+Any field absent from `[llm-ranking]` or `[llm-summary]` falls back to the corresponding value in `[llm]`.
 
 If you do not already have a Claude, Codex, or Gemini subscription, researchers and educators with an `.edu` email address may be eligible for [GitHub Education](https://github.com/education), which opens up higher-quality Copilot models through the GitHub Copilot CLI.
 

@@ -678,6 +678,8 @@ def _resolve_variant_paths(name: str, settings_path: Path) -> VariantPaths:
     logs = data.get("logs", {})
     notes = data.get("notes", {})
     llm = data.get("llm", {})
+    ranking_llm = data.get("llm-ranking", {})
+    summary_llm = data.get("llm-summary", {})
     arxiv_cfg = data.get("arxiv", {})
 
     output_root = _expand(output.get("root", "output"))
@@ -712,7 +714,7 @@ def _resolve_variant_paths(name: str, settings_path: Path) -> VariantPaths:
         history_log=history_log,
         weekly_note_filename=str(notes.get("weekly_note_file", "this-weeks-arxiv-papers.md")),
         rotation_day=str(notes.get("rotation_day", "monday")).strip().lower(),
-        llm_block=llm if isinstance(llm, dict) else {},
+        llm_block=_settings_llm_view(llm, ranking_llm, summary_llm),
         arxiv_thresholds={
             "always_summarize_score": arxiv_cfg.get("always_summarize_score", 85),
             "min_selection_score": arxiv_cfg.get("min_selection_score", 70),
@@ -721,6 +723,17 @@ def _resolve_variant_paths(name: str, settings_path: Path) -> VariantPaths:
         weekly_synthesis_target=band,
         daily_top_paper_heading=str(notes.get("daily_top_paper_heading", "## TODAY'S TOP PAPER")),
     )
+
+
+def _settings_llm_view(
+    llm: object,
+    ranking_llm: object,
+    summary_llm: object,
+) -> dict[str, Any]:
+    base = dict(llm) if isinstance(llm, dict) else {}
+    ranking = {**base, **ranking_llm} if isinstance(ranking_llm, dict) else base
+    summary = {**base, **summary_llm} if isinstance(summary_llm, dict) else base
+    return {**base, "base": base, "ranking": ranking, "summary": summary}
 
 
 def _expand(p: str) -> Path:
@@ -888,8 +901,9 @@ def _section_provider(
     out.append("")
     out.append(
         "  (Resolved from the run-summary `llm` field where present, falling "
-        "back to the `[llm]` block of each settings TOML. The TOML reflects what "
-        "the *next* run will use; the stamp reflects what already happened.)"
+        "back to the `[llm]`, `[llm-ranking]`, and `[llm-summary]` blocks of each "
+        "settings TOML. The TOML reflects what the *next* run will use; the stamp "
+        "reflects what already happened.)"
     )
     out.append("")
     return out
@@ -902,6 +916,17 @@ def _provider_blurb(run: dict[str, Any], paths: VariantPaths) -> str:
         value = view.get(key)
         if value not in (None, ""):
             parts.append(f"{key}={value}")
+    for role in ("ranking", "summary"):
+        role_view = view.get(role)
+        if not isinstance(role_view, dict):
+            continue
+        role_parts = []
+        for key in ("mode", "provider", "model", "effort"):
+            value = role_view.get(key)
+            if value not in (None, ""):
+                role_parts.append(f"{key}={value}")
+        if role_parts:
+            parts.append(f"{role}=({', '.join(role_parts)})")
     source = "run-summary" if (isinstance(run.get("llm"), dict) and run.get("llm")) else "settings TOML"
     parts.append(f"(source: {source})")
     log_status = (

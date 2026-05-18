@@ -32,6 +32,15 @@ class GenerationError(RuntimeError):
     """Raised when the generation service cannot complete a requested step."""
 
 
+def make_provider(config: LlmConfig) -> Provider:
+    """Create and validate a provider from an LlmConfig."""
+    provider = create_provider(config.mode, config.provider, config=config.provider_config())
+    readiness_validator = getattr(provider, "validate_runtime_ready", None)
+    if callable(readiness_validator):
+        readiness_validator()
+    return provider
+
+
 class GenerationService:
     """Owns app-side text generation and the vendored paper summariser."""
 
@@ -46,14 +55,11 @@ class GenerationService:
     ) -> None:
         self.config = config
         self.prompt_logger = prompt_logger
-        self.provider = provider or create_provider(
-            self.config.mode,
-            self.config.provider,
-            config=self.config.provider_config(),
-        )
-        readiness_validator = getattr(self.provider, "validate_runtime_ready", None)
-        if callable(readiness_validator):
-            readiness_validator()
+        self.provider = provider or make_provider(self.config)
+        if provider is not None:
+            readiness_validator = getattr(self.provider, "validate_runtime_ready", None)
+            if callable(readiness_validator):
+                readiness_validator()
 
         if paper_summariser is None:
             if not tag_categories:

@@ -349,3 +349,98 @@ def test_load_config_rejects_always_summarize_score_below_interest_threshold(tmp
 def test_load_config_requires_existing_settings_file(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError, match="Settings file not found"):
         load_config(project_root=tmp_path)
+
+
+def test_load_config_ranking_and_summary_llm_default_to_base_when_sections_absent(tmp_path: Path) -> None:
+    config_path = tmp_path / "settings.toml"
+    config_path.write_text(
+        f"{DEFAULT_HEADINGS}\n"
+        "[llm]\n"
+        "provider = 'copilot'\n",
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.ranking_llm is config.llm
+    assert config.summary_llm is config.llm
+
+
+def test_load_config_llm_ranking_overrides_specific_fields(tmp_path: Path) -> None:
+    config_path = tmp_path / "settings.toml"
+    config_path.write_text(
+        f"{DEFAULT_HEADINGS}\n"
+        "[llm]\n"
+        "mode = 'cli'\n"
+        "provider = 'copilot'\n"
+        "model = 'gpt-4o'\n"
+        "timeout_seconds = 600\n"
+        "\n"
+        "[llm-ranking]\n"
+        "model = 'gpt-4o-mini'\n"
+        "timeout_seconds = 120\n",
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.ranking_llm is not config.llm
+    assert config.ranking_llm.provider == "copilot"
+    assert config.ranking_llm.mode == "cli"
+    assert config.ranking_llm.model == "gpt-4o-mini"
+    assert config.ranking_llm.timeout_seconds == 120
+    assert config.llm.model == "gpt-4o"
+    assert config.llm.timeout_seconds == 600
+    assert config.summary_llm is config.llm
+
+
+def test_load_config_llm_summary_overrides_specific_fields(tmp_path: Path) -> None:
+    config_path = tmp_path / "settings.toml"
+    config_path.write_text(
+        f"{DEFAULT_HEADINGS}\n"
+        "[llm]\n"
+        "mode = 'cli'\n"
+        "provider = 'copilot'\n"
+        "model = 'gpt-4o'\n"
+        "\n"
+        "[llm-summary]\n"
+        "provider = 'openai-compatible'\n"
+        "model = 'claude-opus-4-7'\n"
+        "base_url = 'http://127.0.0.1:9000/v1'\n",
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.summary_llm is not config.llm
+    assert config.summary_llm.mode == "cli"
+    assert config.summary_llm.provider == "openai-compatible"
+    assert config.summary_llm.model == "claude-opus-4-7"
+    assert config.summary_llm.base_url == "http://127.0.0.1:9000/v1"
+    assert config.llm.provider == "copilot"
+    assert config.ranking_llm is config.llm
+
+
+def test_load_config_both_override_sections_can_coexist(tmp_path: Path) -> None:
+    config_path = tmp_path / "settings.toml"
+    config_path.write_text(
+        f"{DEFAULT_HEADINGS}\n"
+        "[llm]\n"
+        "provider = 'copilot'\n"
+        "model = 'gpt-4o'\n"
+        "\n"
+        "[llm-ranking]\n"
+        "model = 'gpt-4o-mini'\n"
+        "\n"
+        "[llm-summary]\n"
+        "model = 'gpt-4-turbo'\n",
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.llm.model == "gpt-4o"
+    assert config.ranking_llm.model == "gpt-4o-mini"
+    assert config.summary_llm.model == "gpt-4-turbo"
+    assert config.ranking_llm.provider == "copilot"
+    assert config.summary_llm.provider == "copilot"

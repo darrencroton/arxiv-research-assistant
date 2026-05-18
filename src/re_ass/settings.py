@@ -115,6 +115,8 @@ class AppConfig:
 
     # llm
     llm: LlmConfig
+    ranking_llm: LlmConfig
+    summary_llm: LlmConfig
 
 
 def _default_project_root() -> Path:
@@ -195,6 +197,48 @@ def _bool_setting(data: dict[str, object], key: str, section_name: str, *, defau
     raise ValueError(f"Setting [{section_name}].{key} must be true or false.")
 
 
+def _parse_llm_config(data: dict[str, object], section: str, root: Path) -> LlmConfig:
+    """Parse a TOML dict (already merged with any base section) into an LlmConfig."""
+    mode = str(data.get("mode", "cli")).strip().lower()
+    provider = str(data.get("provider", "codex")).strip().lower()
+    raw_model = data.get("model")
+    model = str(raw_model).strip() if raw_model not in (None, "") else None
+    raw_effort = data.get("effort")
+    effort = str(raw_effort).strip().lower() if raw_effort is not None else ""
+    if effort == "":
+        effort = None
+    elif effort not in _VALID_LLM_EFFORTS:
+        raise ValueError(f"{section}.effort must be one of {_VALID_LLM_EFFORTS}, got '{effort}'.")
+
+    raw_temperature = float(data.get("temperature", 0.2))
+    if not (0.0 <= raw_temperature <= 2.0):
+        raise ValueError(f"Setting [{section}].temperature must be between 0.0 and 2.0, got {raw_temperature}.")
+
+    return LlmConfig(
+        mode=mode,
+        provider=provider,
+        model=model,
+        effort=effort,
+        timeout_seconds=_positive_int(data, "timeout_seconds", section, default=900),
+        max_output_tokens=_positive_int(data, "max_output_tokens", section, default=32768),
+        max_prompt_chars=_optional_positive_int(data.get("max_prompt_chars"), f"[{section}].max_prompt_chars"),
+        temperature=raw_temperature,
+        retry_attempts=_positive_int(data, "retry_attempts", section, default=3),
+        base_url=_optional_stripped_string(data.get("base_url")),
+        api_key_env=_optional_stripped_string(data.get("api_key_env")),
+        env_file=(
+            _resolve_path(root, str(data.get("env_file")))
+            if _optional_stripped_string(data.get("env_file"))
+            else None
+        ),
+        download_timeout_seconds=_positive_int(data, "download_timeout_seconds", section, default=120),
+        max_pdf_size_mb=_positive_int(data, "max_pdf_size_mb", section, default=100),
+        marker_timeout_seconds=_positive_int(data, "marker_timeout_seconds", section, default=300),
+        ollama_base_url=str(data.get("ollama_base_url", "http://localhost:11434")),
+        ranking_batch_size=_non_negative_int(data, "ranking_batch_size", section, default=0),
+    )
+
+
 def load_config(config_path: Path | None = None, project_root: Path | None = None) -> AppConfig:
     """Load and validate application configuration from settings.toml."""
     root = (project_root or _default_project_root()).resolve()
@@ -217,6 +261,8 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
     notes_data = data.get("notes", {})
     arxiv_data = data.get("arxiv", {})
     llm_data = data.get("llm", {})
+    ranking_raw = data.get("llm-ranking", {})
+    summary_raw = data.get("llm-summary", {})
 
     for name, section in [
         ("output", output_data),
@@ -227,6 +273,8 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
         ("notes", notes_data),
         ("arxiv", arxiv_data),
         ("llm", llm_data),
+        ("llm-ranking", ranking_raw),
+        ("llm-summary", summary_raw),
     ]:
         if not isinstance(section, dict):
             raise ValueError(f"Invalid configuration format for [{name}] in settings.toml.")
@@ -307,44 +355,9 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
         )
 
     # LLM
-    mode = str(llm_data.get("mode", "cli")).strip().lower()
-    provider = str(llm_data.get("provider", "codex")).strip().lower()
-    raw_model = llm_data.get("model")
-    model = str(raw_model).strip() if raw_model not in (None, "") else None
-    raw_effort = llm_data.get("effort")
-    effort = str(raw_effort).strip().lower() if raw_effort is not None else ""
-    if effort == "":
-        effort = None
-    elif effort not in _VALID_LLM_EFFORTS:
-        raise ValueError(f"llm.effort must be one of {_VALID_LLM_EFFORTS}, got '{effort}'.")
-
-    raw_temperature = float(llm_data.get("temperature", 0.2))
-    if not (0.0 <= raw_temperature <= 2.0):
-        raise ValueError(f"Setting [llm].temperature must be between 0.0 and 2.0, got {raw_temperature}.")
-
-    llm = LlmConfig(
-        mode=mode,
-        provider=provider,
-        model=model,
-        effort=effort,
-        timeout_seconds=_positive_int(llm_data, "timeout_seconds", "llm", default=900),
-        max_output_tokens=_positive_int(llm_data, "max_output_tokens", "llm", default=32768),
-        max_prompt_chars=_optional_positive_int(llm_data.get("max_prompt_chars"), "[llm].max_prompt_chars"),
-        temperature=raw_temperature,
-        retry_attempts=_positive_int(llm_data, "retry_attempts", "llm", default=3),
-        base_url=_optional_stripped_string(llm_data.get("base_url")),
-        api_key_env=_optional_stripped_string(llm_data.get("api_key_env")),
-        env_file=(
-            _resolve_path(root, str(llm_data.get("env_file")))
-            if _optional_stripped_string(llm_data.get("env_file"))
-            else None
-        ),
-        download_timeout_seconds=_positive_int(llm_data, "download_timeout_seconds", "llm", default=120),
-        max_pdf_size_mb=_positive_int(llm_data, "max_pdf_size_mb", "llm", default=100),
-        marker_timeout_seconds=_positive_int(llm_data, "marker_timeout_seconds", "llm", default=300),
-        ollama_base_url=str(llm_data.get("ollama_base_url", "http://localhost:11434")),
-        ranking_batch_size=_non_negative_int(llm_data, "ranking_batch_size", "llm", default=0),
-    )
+    llm = _parse_llm_config(llm_data, "llm", root)
+    ranking_llm = _parse_llm_config({**llm_data, **ranking_raw}, "llm-ranking", root) if ranking_raw else llm
+    summary_llm = _parse_llm_config({**llm_data, **summary_raw}, "llm-summary", root) if summary_raw else llm
 
     return AppConfig(
         output_root=output_root,
@@ -376,4 +389,6 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
         always_summarize_score=always_summarize_score,
         min_selection_score=min_selection_score,
         llm=llm,
+        ranking_llm=ranking_llm,
+        summary_llm=summary_llm,
     )

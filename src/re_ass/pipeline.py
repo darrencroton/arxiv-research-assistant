@@ -8,7 +8,7 @@ from pathlib import Path
 import tempfile
 
 from re_ass.arxiv_fetcher import ArxivFetcher
-from re_ass.generation_service import GenerationService
+from re_ass.generation_service import GenerationService, make_provider
 from re_ass.models import ArxivPaper, ProcessedPaper
 from re_ass.note_manager import NoteManager
 from re_ass.paper_identity import PaperIdentity, derive_identity
@@ -16,7 +16,7 @@ from re_ass.paper_summariser.service import log_summary_text_quality_warnings
 from re_ass.preferences import load_preferences
 from re_ass.prompt_logger import PromptLogger
 from re_ass.ranking import PaperRanker, RankingError
-from re_ass.settings import AppConfig
+from re_ass.settings import AppConfig, LlmConfig
 from re_ass.state_store import StateStore
 
 
@@ -138,15 +138,7 @@ def _bootstrap_runtime(
     state_store.bootstrap()
 
 
-def _llm_stamp(config: AppConfig) -> dict[str, object]:
-    """Snapshot of the LLM config the pipeline is about to use.
-
-    Persisted into every run summary so the A/B compare script (and any
-    after-the-fact audit) can identify the model/provider/effort actually
-    in play without re-reading the settings TOML, which may have drifted
-    by then.
-    """
-    llm = config.llm
+def _llm_config_stamp(llm: LlmConfig) -> dict[str, object]:
     return {
         "mode": llm.mode,
         "provider": llm.provider,
@@ -154,6 +146,23 @@ def _llm_stamp(config: AppConfig) -> dict[str, object]:
         "effort": llm.effort,
         "temperature": llm.temperature,
         "max_output_tokens": llm.max_output_tokens,
+    }
+
+
+def _llm_stamp(config: AppConfig) -> dict[str, object]:
+    """Snapshot of the LLM config the pipeline is about to use.
+
+    Persisted into every run summary so the A/B compare script (and any
+    after-the-fact audit) can identify the model/provider/effort actually
+    in play for each LLM role without re-reading the settings TOML, which
+    may have drifted by then.
+    """
+    base = _llm_config_stamp(config.llm)
+    return {
+        **base,
+        "base": base,
+        "ranking": _llm_config_stamp(config.ranking_llm),
+        "summary": _llm_config_stamp(config.summary_llm),
     }
 
 
@@ -385,12 +394,17 @@ def _run_announcement_day(
         run_summary["candidate_count"] = len(candidates)
         run_summary["candidate_keys"] = _paper_keys(candidates)
 
+        ranking_provider = (
+            generation_service.provider
+            if config.ranking_llm is config.summary_llm
+            else make_provider(config.ranking_llm)
+        )
         ranker = PaperRanker(
-            provider=generation_service.provider,
-            config=config.llm,
+            provider=ranking_provider,
+            config=config.ranking_llm,
             always_summarize_score=config.always_summarize_score,
             min_selection_score=config.min_selection_score,
-            batch_size=config.llm.ranking_batch_size,
+            batch_size=config.ranking_llm.ranking_batch_size,
             prompt_logger=generation_service.prompt_logger,
         )
         selection = ranker.rank_papers(preferences, candidates)
@@ -540,7 +554,7 @@ def run(config: AppConfig, run_date: date | None = None, *, backfill: bool = Fal
         prompt_logger = PromptLogger(config.logs_root / "debug")
         prompt_logger.clear()
         generation_service = GenerationService(
-            config=config.llm,
+            config=config.summary_llm,
             tag_categories=preferences.categories,
             prompt_logger=prompt_logger,
         )

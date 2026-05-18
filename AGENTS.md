@@ -33,7 +33,7 @@
 
 `main.py` (CLI entry) → `pipeline.py` (orchestration) → `arxiv_fetcher.py` (fetch candidates) → `ranking.py` (LLM rank + threshold/cap) → `note_manager.py` (daily/weekly note updates) → `state_store.py` (completion records)
 
-Supporting: `settings.py` (config loading), `preferences.py` (user preference parsing), `paper_summariser/` (PDF download + extraction), `generation_service.py` (LLM provider abstraction), `models.py` (shared data types)
+Supporting: `settings.py` (config loading), `preferences.py` (user preference parsing), `paper_summariser/` (PDF download + extraction), `generation_service.py` (LLM provider abstraction and `make_provider` helper), `models.py` (shared data types)
 
 ## Environment
 
@@ -56,3 +56,4 @@ Supporting: `settings.py` (config loading), `preferences.py` (user preference pa
 - Explicit `--date` backfills are surgical: process exactly that announcement day into that date's daily note; do not touch the current weekly summary.
 - `state/papers/*.json` is the authoritative completion record; note or PDF presence alone is not.
 - `state/runs/*.json` should remain audit-friendly and include full ranking plus final-selection diagnostics.
+- `[llm]` is the base LLM config used for both ranking and summarisation. Optional `[llm-ranking]` and `[llm-summary]` sections override only the fields that differ; absent sections reuse the base `LlmConfig` object (same identity). `AppConfig` exposes `.llm`, `.ranking_llm`, and `.summary_llm`; pipeline code uses `.ranking_llm` for `PaperRanker` and `.summary_llm` for `GenerationService`.

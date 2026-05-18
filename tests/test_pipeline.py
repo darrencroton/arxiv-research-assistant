@@ -1,3 +1,5 @@
+import json
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
@@ -5,9 +7,8 @@ from types import SimpleNamespace
 from re_ass.generation_service import GenerationError
 from re_ass.models import PreferenceConfig
 from re_ass.note_manager import NoteManager
-from re_ass.paper_identity import extract_source_id
+from re_ass.paper_identity import derive_identity, extract_source_id
 from re_ass.pipeline import run
-from re_ass.paper_identity import derive_identity
 from re_ass.ranking import RankingError
 from tests.support import make_app_config, make_paper
 
@@ -698,3 +699,28 @@ def test_pipeline_records_announcement_and_ranking_diagnostics(tmp_path: Path, m
     assert '"ranking_results"' in summary_text
     assert '"selected_results"' in summary_text
     assert '"weekly_interest_results"' in summary_text
+
+
+def test_pipeline_run_summary_records_role_specific_llm_stamps(tmp_path: Path, monkeypatch) -> None:
+    base_config = make_app_config(tmp_path)
+    ranking_llm = replace(base_config.llm, provider="copilot", model="rank-mini")
+    summary_llm = replace(base_config.llm, provider="claude", model="summary-opus")
+    config = replace(base_config, ranking_llm=ranking_llm, summary_llm=summary_llm)
+    paper = make_paper(arxiv_id="2603.30081", title="Role Stamp Paper")
+
+    monkeypatch.setattr("re_ass.pipeline.ArxivFetcher", lambda **_kwargs: FakeFetcher([paper], available_dates=[date(2026, 3, 26)]))
+    monkeypatch.setattr("re_ass.pipeline.PaperRanker", lambda **kwargs: FakeRanker(**kwargs))
+    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: _preferences())
+    monkeypatch.setattr("re_ass.pipeline.GenerationService", lambda **_kwargs: FakeGenerationService())
+    monkeypatch.setattr("re_ass.pipeline.make_provider", lambda _config: object())
+
+    exit_code = run(config, date(2026, 3, 26))
+
+    assert exit_code == 0
+    run_summary = json.loads(next(config.state_runs_dir.glob("*.json")).read_text(encoding="utf-8"))
+    assert run_summary["llm"]["provider"] == "claude"
+    assert run_summary["llm"]["base"]["provider"] == "claude"
+    assert run_summary["llm"]["ranking"]["provider"] == "copilot"
+    assert run_summary["llm"]["ranking"]["model"] == "rank-mini"
+    assert run_summary["llm"]["summary"]["provider"] == "claude"
+    assert run_summary["llm"]["summary"]["model"] == "summary-opus"

@@ -7,9 +7,9 @@ from pathlib import Path
 import sys
 
 from re_ass.bootstrap import default_project_root, ensure_user_preferences
-from re_ass.generation_service import GenerationService
+from re_ass.generation_service import GenerationService, make_provider
 from re_ass.preferences import load_preferences
-from re_ass.settings import load_config
+from re_ass.settings import LlmConfig, load_config
 
 
 _RUNTIME_DIRECTORIES = (
@@ -36,6 +36,23 @@ class SetupSummary:
     llm_provider: str
 
 
+def _validate_provider_role(
+    *,
+    role: str,
+    config: LlmConfig,
+    tag_categories: tuple[str, ...],
+) -> None:
+    try:
+        if role == "summary":
+            GenerationService(config=config, tag_categories=tag_categories)
+        else:
+            make_provider(config)
+    except Exception as error:
+        raise ValueError(
+            f"LLM provider validation failed for {role} ({config.mode}/{config.provider}): {error}"
+        ) from error
+
+
 def ensure_runtime_directories(project_root: Path | None = None) -> tuple[Path, ...]:
     """Create runtime directories under the project root."""
     root = (project_root or default_project_root()).resolve()
@@ -59,9 +76,19 @@ def prepare_workspace(project_root: Path | None = None) -> SetupSummary:
 
     settings_bootstrapped = any(path.name == "settings.toml" for path in created_user_files)
     try:
-        GenerationService(config=config.llm, tag_categories=preferences.categories)
+        _validate_provider_role(
+            role="summary",
+            config=config.summary_llm,
+            tag_categories=preferences.categories,
+        )
+        if config.ranking_llm is not config.summary_llm:
+            _validate_provider_role(
+                role="ranking",
+                config=config.ranking_llm,
+                tag_categories=preferences.categories,
+            )
     except Exception as error:
-        message = f"LLM provider validation failed for {config.llm.mode}/{config.llm.provider}: {error}"
+        message = str(error)
         if not settings_bootstrapped:
             raise ValueError(message) from error
 
@@ -75,16 +102,16 @@ def prepare_workspace(project_root: Path | None = None) -> SetupSummary:
             created_user_files=created_user_files,
             provider_validated=False,
             provider_warning=warning,
-            llm_mode=config.llm.mode,
-            llm_provider=config.llm.provider,
+            llm_mode=config.summary_llm.mode,
+            llm_provider=config.summary_llm.provider,
         )
 
     return SetupSummary(
         created_user_files=created_user_files,
         provider_validated=True,
         provider_warning=None,
-        llm_mode=config.llm.mode,
-        llm_provider=config.llm.provider,
+        llm_mode=config.summary_llm.mode,
+        llm_provider=config.summary_llm.provider,
     )
 
 
