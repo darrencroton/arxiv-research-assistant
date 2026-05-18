@@ -69,8 +69,9 @@ def test_ranker_uses_ordered_priorities_and_compact_candidate_payload(tmp_path) 
     ranker = PaperRanker(
         provider=provider,
         config=make_app_config(tmp_path).llm,
-        always_summarize_score=90.0,
+        min_summarize_score=90.0,
         min_selection_score=80.0,
+        max_summarized_papers=100,
     )
 
     selection = ranker.rank_papers(_preferences("Agents", "Tool use"), [paper])
@@ -117,8 +118,9 @@ def test_ranker_requires_science_and_method_matches_when_sections_are_present(tm
     ranker = PaperRanker(
         provider=provider,
         config=make_app_config(tmp_path).llm,
-        always_summarize_score=90.0,
+        min_summarize_score=90.0,
         min_selection_score=80.0,
+        max_summarized_papers=100,
     )
     preferences = PreferenceConfig(
         priorities=("Little red dots", "Semi-analytic models"),
@@ -166,13 +168,14 @@ def test_ranker_filters_by_threshold(tmp_path) -> None:
     ranker = PaperRanker(
         provider=provider,
         config=make_app_config(tmp_path).llm,
-        always_summarize_score=90.0,
+        min_summarize_score=90.0,
         min_selection_score=80.0,
+        max_summarized_papers=100,
     )
 
     selection = ranker.rank_papers(_preferences("Agents"), papers)
 
-    # Strong Fit clears always_summarize_score → always_selected. Only one top-band
+    # Strong Fit clears min_summarize_score. Only one top-band
     # paper, so top_up adds Second Fit. Weak Fit is below min_selection_score.
     assert [paper.title for paper in selection.selected_papers] == ["Strong Fit", "Second Fit"]
     assert [item.paper.title for item in selection.weekly_interest] == []
@@ -197,8 +200,9 @@ def test_ranker_sorts_by_score_when_provider_returns_unsorted_payload(tmp_path) 
     ranker = PaperRanker(
         provider=provider,
         config=make_app_config(tmp_path).llm,
-        always_summarize_score=90.0,
+        min_summarize_score=90.0,
         min_selection_score=80.0,
+        max_summarized_papers=100,
     )
 
     selection = ranker.rank_papers(_preferences("Agents"), papers)
@@ -230,13 +234,14 @@ def test_ranker_tops_up_best_fill_when_only_one_top_band_paper(tmp_path) -> None
     ranker = PaperRanker(
         provider=provider,
         config=make_app_config(tmp_path).llm,
-        always_summarize_score=90.0,
+        min_summarize_score=90.0,
         min_selection_score=70.0,
+        max_summarized_papers=100,
     )
 
     selection = ranker.rank_papers(_preferences("Agents"), papers)
 
-    # Exceptional Fit clears always_summarize_score → always_selected. Only one top-band
+    # Exceptional Fit clears min_summarize_score. Only one top-band
     # paper, so top_up adds the best fill candidate (Strong Mid Fit). Overflow Mid Fit
     # and anything below min_selection_score remain in weekly_interest.
     assert [paper.title for paper in selection.selected_papers] == ["Exceptional Fit", "Strong Mid Fit"]
@@ -265,14 +270,54 @@ def test_ranker_keeps_all_top_band_papers_regardless_of_count(tmp_path) -> None:
     ranker = PaperRanker(
         provider=provider,
         config=make_app_config(tmp_path).llm,
-        always_summarize_score=90.0,
+        min_summarize_score=90.0,
         min_selection_score=70.0,
+        max_summarized_papers=100,
     )
 
     selection = ranker.rank_papers(_preferences("Agents"), papers)
 
     assert [paper.title for paper in selection.selected_papers] == ["Top Fit One", "Top Fit Two", "Top Fit Three"]
     assert [item.paper.title for item in selection.weekly_interest] == ["Mid Fit"]
+
+
+def test_ranker_caps_daily_summaries_and_demotes_overflow_to_weekly_interest(tmp_path) -> None:
+    papers = [
+        make_paper(arxiv_id="2603.40041", title="Top Fit One"),
+        make_paper(arxiv_id="2603.40042", title="Top Fit Two"),
+        make_paper(arxiv_id="2603.40043", title="Top Fit Three"),
+        make_paper(arxiv_id="2603.40044", title="Top Fit Four"),
+        make_paper(arxiv_id="2603.40045", title="Mid Fit"),
+    ]
+    provider = RecordingProvider(
+        json.dumps(
+            {
+                "ranked_papers": [
+                    {"candidate_id": "arxiv:2603.40041", "score": 99, "rationale": "Excellent."},
+                    {"candidate_id": "arxiv:2603.40042", "score": 96, "rationale": "Excellent."},
+                    {"candidate_id": "arxiv:2603.40043", "score": 94, "rationale": "Excellent."},
+                    {"candidate_id": "arxiv:2603.40044", "score": 92, "rationale": "Excellent."},
+                    {"candidate_id": "arxiv:2603.40045", "score": 81, "rationale": "Good fallback."},
+                ]
+            }
+        )
+    )
+    ranker = PaperRanker(
+        provider=provider,
+        config=make_app_config(tmp_path).llm,
+        min_summarize_score=90.0,
+        min_selection_score=70.0,
+        max_summarized_papers=3,
+    )
+
+    selection = ranker.rank_papers(_preferences("Agents"), papers)
+
+    assert [paper.title for paper in selection.selected_papers] == [
+        "Top Fit One",
+        "Top Fit Two",
+        "Top Fit Three",
+    ]
+    assert [item.paper.title for item in selection.weekly_interest] == ["Top Fit Four", "Mid Fit"]
 
 
 def test_ranker_tops_up_one_paper_when_exactly_one_in_top_band(tmp_path) -> None:
@@ -321,8 +366,9 @@ def test_ranker_tops_up_one_paper_when_exactly_one_in_top_band(tmp_path) -> None
     ranker = PaperRanker(
         provider=provider,
         config=make_app_config(tmp_path).llm,
-        always_summarize_score=90.0,
+        min_summarize_score=90.0,
         min_selection_score=70.0,
+        max_summarized_papers=100,
     )
     preferences = PreferenceConfig(
         priorities=("Galaxy evolution", "Hydrodynamical simulations"),
@@ -333,7 +379,7 @@ def test_ranker_tops_up_one_paper_when_exactly_one_in_top_band(tmp_path) -> None
 
     selection = ranker.rank_papers(preferences, papers)
 
-    # Always Keep clears always_summarize_score; only one top-band paper so top_up adds
+    # Always Keep clears min_summarize_score; only one top-band paper so top_up adds
     # the best fill candidate (Near Top Rescue). Second Near Top and Interest Only remain
     # in weekly_interest.
     assert [paper.title for paper in selection.selected_papers] == ["Always Keep", "Near Top Rescue"]
@@ -386,8 +432,9 @@ def test_ranker_does_not_top_up_when_two_or_more_top_band_papers_exist(tmp_path)
     ranker = PaperRanker(
         provider=provider,
         config=make_app_config(tmp_path).llm,
-        always_summarize_score=90.0,
+        min_summarize_score=90.0,
         min_selection_score=70.0,
+        max_summarized_papers=100,
     )
     preferences = PreferenceConfig(
         priorities=("Galaxy evolution", "Hydrodynamical simulations"),
@@ -423,13 +470,14 @@ def test_ranker_tops_up_fill_when_one_top_band_paper(tmp_path) -> None:
     ranker = PaperRanker(
         provider=provider,
         config=make_app_config(tmp_path).llm,
-        always_summarize_score=90.0,
+        min_summarize_score=90.0,
         min_selection_score=70.0,
+        max_summarized_papers=100,
     )
 
     selection = ranker.rank_papers(_preferences("Agents"), papers)
 
-    # Always Keep clears always_summarize_score; only one top-band paper so top_up
+    # Always Keep clears min_summarize_score; only one top-band paper so top_up
     # adds Weekly Only. Below Threshold is under min_selection_score.
     assert [paper.title for paper in selection.selected_papers] == ["Always Keep", "Weekly Only"]
     assert [item.paper.title for item in selection.weekly_interest] == []
@@ -453,8 +501,9 @@ def test_ranker_selects_one_fill_paper_when_no_top_band_papers_exist(tmp_path) -
     ranker = PaperRanker(
         provider=provider,
         config=make_app_config(tmp_path).llm,
-        always_summarize_score=90.0,
+        min_summarize_score=90.0,
         min_selection_score=70.0,
+        max_summarized_papers=100,
     )
 
     selection = ranker.rank_papers(_preferences("Agents"), papers)
@@ -492,13 +541,14 @@ def test_ranker_repairs_invalid_payload_once(tmp_path) -> None:
     ranker = PaperRanker(
         provider=provider,
         config=make_app_config(tmp_path).llm,
-        always_summarize_score=90.0,
+        min_summarize_score=90.0,
         min_selection_score=70.0,
+        max_summarized_papers=100,
     )
 
     selection = ranker.rank_papers(_preferences("Agents"), papers)
 
-    # Paper One (97) clears always_summarize_score; only one top-band paper so top_up
+    # Paper One (97) clears min_summarize_score; only one top-band paper so top_up
     # adds Paper Two (75).
     assert [paper.title for paper in selection.selected_papers] == ["Paper One", "Paper Two"]
     assert [item.paper.title for item in selection.weekly_interest] == []
@@ -512,8 +562,9 @@ def test_ranker_retries_missing_papers_instead_of_filling_score_zero(tmp_path) -
     ranker = PaperRanker(
         provider=provider,
         config=make_app_config(tmp_path).llm,
-        always_summarize_score=90.0,
+        min_summarize_score=90.0,
         min_selection_score=80.0,
+        max_summarized_papers=100,
     )
 
     with pytest.raises(RankingError, match="omitted candidate_id"):
@@ -587,8 +638,9 @@ def test_ranker_batches_candidates_and_merges_by_score(tmp_path) -> None:
     ranker = PaperRanker(
         provider=provider,
         config=make_app_config(tmp_path).llm,
-        always_summarize_score=90.0,
+        min_summarize_score=90.0,
         min_selection_score=70.0,
+        max_summarized_papers=100,
         batch_size=2,
     )
 
@@ -601,7 +653,7 @@ def test_ranker_batches_candidates_and_merges_by_score(tmp_path) -> None:
         "Batch One B",
         "Batch Two D",
     ]
-    # Batch Two Winner (95) clears always_summarize_score; only one top-band paper so
+    # Batch Two Winner (95) clears min_summarize_score; only one top-band paper so
     # top_up adds Batch One A (75). Batch One B (60) and Batch Two D (40) are below
     # min_selection_score.
     assert [paper.title for paper in selection.selected_papers] == ["Batch Two Winner", "Batch One A"]
@@ -657,8 +709,9 @@ def test_ranker_keeps_one_sided_papers_in_weekly_interest(tmp_path) -> None:
     ranker = PaperRanker(
         provider=provider,
         config=make_app_config(tmp_path).llm,
-        always_summarize_score=90.0,
+        min_summarize_score=90.0,
         min_selection_score=70.0,
+        max_summarized_papers=100,
         batch_size=1,
     )
     preferences = PreferenceConfig(
@@ -697,8 +750,9 @@ def test_ranker_retries_invalid_payloads_before_failing(tmp_path) -> None:
     ranker = PaperRanker(
         provider=provider,
         config=make_app_config(tmp_path).llm,
-        always_summarize_score=90.0,
+        min_summarize_score=90.0,
         min_selection_score=80.0,
+        max_summarized_papers=100,
     )
 
     with pytest.raises(RankingError, match="remained invalid after 6 validation attempts"):
@@ -733,8 +787,9 @@ def test_ranker_splits_large_invalid_batch_without_dropping_papers(tmp_path) -> 
     ranker = PaperRanker(
         provider=provider,
         config=make_app_config(tmp_path).llm,
-        always_summarize_score=90.0,
+        min_summarize_score=90.0,
         min_selection_score=70.0,
+        max_summarized_papers=100,
     )
 
     selection = ranker.rank_papers(_preferences("Agents"), papers)
@@ -764,8 +819,9 @@ def test_ranker_retries_once_after_retryable_provider_failure(tmp_path, monkeypa
     ranker = PaperRanker(
         provider=provider,
         config=make_app_config(tmp_path).llm,
-        always_summarize_score=90.0,
+        min_summarize_score=90.0,
         min_selection_score=80.0,
+        max_summarized_papers=100,
     )
     sleep_calls: list[int] = []
     monkeypatch.setattr("re_ass.ranking.time.sleep", lambda seconds: sleep_calls.append(seconds))
@@ -783,8 +839,9 @@ def test_ranker_does_not_retry_non_retryable_provider_failure(tmp_path, monkeypa
     ranker = PaperRanker(
         provider=provider,
         config=make_app_config(tmp_path).llm,
-        always_summarize_score=90.0,
+        min_summarize_score=90.0,
         min_selection_score=80.0,
+        max_summarized_papers=100,
     )
     sleep_calls: list[int] = []
     monkeypatch.setattr("re_ass.ranking.time.sleep", lambda seconds: sleep_calls.append(seconds))

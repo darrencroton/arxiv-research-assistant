@@ -137,7 +137,7 @@ STEP-BY-STEP
       - Reliability (fatal/warning/error log events scoped to this announcement)
       - Candidate alignment (fetch-time parity prerequisite)
       - Threshold discipline (how many papers each side pushed into the
-        always-summarize and min-selection bands)
+        min-summarize and min-selection bands)
       - Top-10 ranking overlap (Jaccard at top-3/5/10 + Kendall τ on shared)
       - Selection overlap (the visible top-N picks)
       - Per-paper score deltas (sorted by |delta|)
@@ -716,8 +716,9 @@ def _resolve_variant_paths(name: str, settings_path: Path) -> VariantPaths:
         rotation_day=str(notes.get("rotation_day", "monday")).strip().lower(),
         llm_block=_settings_llm_view(llm, ranking_llm, summary_llm),
         arxiv_thresholds={
-            "always_summarize_score": arxiv_cfg.get("always_summarize_score", 85),
+            "min_summarize_score": arxiv_cfg.get("min_summarize_score", 85),
             "min_selection_score": arxiv_cfg.get("min_selection_score", 70),
+            "max_summarized_papers": arxiv_cfg.get("max_summarized_papers", 3),
         },
         weekly_synthesis_heading=str(notes.get("weekly_synthesis_heading", "## SYNTHESIS")),
         weekly_synthesis_target=band,
@@ -864,7 +865,7 @@ def _format_day_report(
     lines += _section_provider(isodate, bench, variant, bench_paths, variant_paths)
     lines += _section_reliability(isodate, bench, variant, bench_paths, variant_paths)
     lines += _section_candidate_alignment(bench, variant, variant_paths.name)
-    lines += _section_threshold_discipline(bench, variant, variant_paths)
+    lines += _section_threshold_discipline(bench, variant, bench_paths, variant_paths)
     lines += _section_topn_overlap(bench, variant, variant_paths.name)
     lines += _section_selection_overlap(bench, variant, variant_paths.name)
     lines += _section_score_deltas(bench, variant, variant_paths.name)
@@ -1209,28 +1210,38 @@ def _reliability_for_side(isodate: str, run: dict[str, Any], paths: VariantPaths
 def _section_threshold_discipline(
     bench: dict[str, Any],
     variant: dict[str, Any],
+    bench_paths: VariantPaths,
     variant_paths: VariantPaths,
 ) -> list[str]:
     out = [
         "### Threshold discipline",
         "",
-        "How many papers each side pushed into the `always_summarize_score` and "
-        "`min_selection_score` bands. All papers clearing `always_summarize_score` "
-        "are always included — there is no cap on this band. A healthy run has 0–1 "
-        "papers in the always-summarize band; consistently 2+ suggests score "
-        "inflation on borderline papers rather than a misconfiguration.",
+        "How many papers each side pushed into the `min_summarize_score` and "
+        "`min_selection_score` bands. Papers clearing `min_summarize_score` are "
+        "selected up to `max_summarized_papers`; overflow demotes to weekly interest. "
+        "A healthy run has 0–1 papers in the summarise band; consistently hitting the "
+        "cap suggests score inflation on borderline papers rather than a misconfiguration.",
         "",
     ]
-    always = float(variant_paths.arxiv_thresholds.get("always_summarize_score", 85))
-    minsel = float(variant_paths.arxiv_thresholds.get("min_selection_score", 70))
-    out.append(f"  thresholds: always_summarize_score={always} min_selection_score={minsel}")
-    for label, run in (("benchmark", bench), (variant_paths.name, variant)):
+    for label, run, paths in (
+        ("benchmark", bench, bench_paths),
+        (variant_paths.name, variant, variant_paths),
+    ):
+        min_summary = float(paths.arxiv_thresholds.get("min_summarize_score", 85))
+        minsel = float(paths.arxiv_thresholds.get("min_selection_score", 70))
+        cap = int(paths.arxiv_thresholds.get("max_summarized_papers", 3))
         rr = run.get("ranking_results") or []
-        n_always = sum(1 for x in rr if (x.get("score") or 0) >= always)
+        n_summary = sum(1 for x in rr if (x.get("score") or 0) >= min_summary)
         n_minsel = sum(1 for x in rr if (x.get("score") or 0) >= minsel)
         selected = len(run.get("selected_paper_keys") or [])
-        flag = " ⚠ score inflation — check whether always-summarize papers are genuinely on-priority" if n_always >= 2 else ""
-        out.append(f"- **{label}**: ≥{always}: {n_always} | ≥{minsel}: {n_minsel} | selected: {selected}{flag}")
+        overflow = max(0, n_summary - cap)
+        hit_cap = selected >= cap and n_summary >= cap
+        flag = " ⚠ hit cap — check whether capped papers are genuinely on-priority" if hit_cap else ""
+        out.append(
+            f"- **{label}**: min_summarize_score={min_summary} cap={cap} | "
+            f"≥{min_summary}: {n_summary} | ≥{minsel}: {n_minsel} | "
+            f"selected: {selected} | overflow_to_interest: {overflow}{flag}"
+        )
     out.append("")
     return out
 
@@ -1239,7 +1250,7 @@ def _section_topn_overlap(bench: dict[str, Any], variant: dict[str, Any], name: 
     """Top-N agreement is a more honest signal than selection overlap.
 
     Selection overlap can be 0 between two providers who agree to within a
-    few points on the top-3 ranking but happen to straddle the always_summarize
+    few points on the top-3 ranking but happen to straddle the min_summarize
     threshold. Top-N overlap captures the underlying agreement: are they reading
     the same pool of papers as "interesting"?
     """

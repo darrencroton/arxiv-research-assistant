@@ -20,7 +20,7 @@ LOGGER = logging.getLogger(__name__)
 _RANKING_RETRY_WAIT_SECONDS = 2
 _MIN_RANKING_VALIDATION_ATTEMPTS = 4
 _MIN_RECOVERY_BATCH_SIZE = 10
-# If fewer than this many papers clear always_summarize_score, add the best
+# If fewer than this many papers clear min_summarize_score, add the best
 # qualifying paper below the threshold so thin days still surface useful content.
 _TOP_UP_THRESHOLD = 2
 # Minimum finalist pool size to justify a re-rank pass; below this the pool is
@@ -432,22 +432,24 @@ def _split_for_recovery(candidates: list[ArxivPaper]) -> list[list[ArxivPaper]]:
 
 
 class PaperRanker:
-    """Rank all candidate papers, always keep the strongest, and overflow the rest to weekly interest."""
+    """Rank all candidate papers, keep the strongest up to the daily cap, and overflow the rest to weekly interest."""
 
     def __init__(
         self,
         *,
         provider: Provider,
         config: LlmConfig,
-        always_summarize_score: float,
+        min_summarize_score: float,
         min_selection_score: float,
+        max_summarized_papers: int,
         batch_size: int = 0,
         prompt_logger: PromptLogger | None = None,
     ) -> None:
         self.provider = provider
         self.config = config
-        self.always_summarize_score = always_summarize_score
+        self.min_summarize_score = min_summarize_score
         self.min_selection_score = min_selection_score
+        self.max_summarized_papers = max_summarized_papers
         self.batch_size = max(0, batch_size)
         self.prompt_logger = prompt_logger
 
@@ -520,23 +522,25 @@ class PaperRanker:
                 or (item.science_match is True and item.method_match is True)
             )
         ]
-        always_selected = [item for item in eligible if item.score >= self.always_summarize_score]
-        fill_candidates = [item for item in eligible if item.score < self.always_summarize_score]
-        top_up = fill_candidates[:1] if len(always_selected) < _TOP_UP_THRESHOLD else []
-        selected = always_selected + top_up
+        above_threshold = [item for item in eligible if item.score >= self.min_summarize_score]
+        fill_candidates = [item for item in eligible if item.score < self.min_summarize_score]
+        top_up = fill_candidates[:1] if len(above_threshold) < _TOP_UP_THRESHOLD else []
+        selected = (above_threshold + top_up)[:self.max_summarized_papers]
         selected_keys = {item.paper_key for item in selected}
         # Use score-only threshold for weekly interest so partial-match papers
         # remain visible even when dual_match is required for daily selection.
+        # Papers above max_summarized_papers also fall through to weekly interest here.
         weekly_interest = [
             item for item in ranked
             if item.score >= self.min_selection_score
             and item.paper_key not in selected_keys
         ]
         LOGGER.info(
-            "Ranked %s candidate(s): selected=%s always_threshold=%s top_up=%s interest_threshold=%s weekly_interest=%s dual_match_required=%s",
+            "Ranked %s candidate(s): selected=%s min_summarize_threshold=%s max_summarized=%s top_up=%s interest_threshold=%s weekly_interest=%s dual_match_required=%s",
             len(candidates),
             len(selected),
-            self.always_summarize_score,
+            self.min_summarize_score,
+            self.max_summarized_papers,
             len(top_up),
             self.min_selection_score,
             len(weekly_interest),

@@ -210,7 +210,8 @@ When priorities are split into `## Priorities - Science` and `## Priorities - Me
 
 **Daily selection:**
 
-- Papers scoring at or above `[arxiv].always_summarize_score` that meet the dual-match requirement are selected and fully summarised.
+- Papers scoring at or above `[arxiv].min_summarize_score` that meet the dual-match requirement are selected and fully summarised, up to `[arxiv].max_summarized_papers` per day (default 3).
+- Papers beyond the cap are demoted to weekly interest rather than dropped.
 - If fewer than two papers are selected, the next-best qualifying paper below the threshold is added as a top-up, so thin days still surface something useful.
 
 **Weekly interest:**

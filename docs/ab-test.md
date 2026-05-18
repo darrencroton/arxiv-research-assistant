@@ -61,7 +61,7 @@ shared, consistent way to size the gap between two providers.
 |---|---|---|---|
 | **R1** | Selection on-priority & defensible | Top pick is a clear match to a named preference (dual `science_match` + `method_match`); rationale names *which* priority. | `### Rationale side-by-side`, `### Selection overlap`, `### Per-paper score deltas`. |
 | **R2** | Top-N ranking agreement | If the two providers disagree on top-1, they should at least agree on the top-3 pool. Jaccard ≥ 0.6 at top-5 and Kendall τ ≥ +0.5 on shared keys. | `### Top-10 ranking overlap`. |
-| **R3** | Threshold discipline | Score distribution separates strong-match papers from the rest. Typical daily selections are 1–3: papers clearing `always_summarize_score` plus at most one top-up when fewer than two papers cleared the threshold. Consistently 3+ selections per day indicate score inflation on borderline papers — the question is whether each score is genuinely justified. | `### Threshold discipline`. |
+| **R3** | Threshold discipline | Score distribution separates strong-match papers from the rest. Typical daily selections are 1–3: papers clearing `min_summarize_score` plus at most one top-up when fewer than two papers cleared the threshold, capped at `max_summarized_papers`. Consistently hitting the cap each day suggests score inflation on borderline papers — check whether each score is genuinely justified. | `### Threshold discipline`. |
 | **R4** | Summary depth & accuracy | Key Ideas hit the paper's headline numbers; Results section quotes specific figures of merit; every claim has a paper-quote footnote with page anchor; Weaknesses concrete. | `### Paper-summary structure`. |
 | **R5** | Template integrity | All required sections present; glossary populated (not silently dropped); tags from controlled vocabulary; no orphan H2/H1 inside managed sections. | `### Paper-summary structure` (missing_sections, glossary_terms), `### Weekly synthesis` (orphan_h2_count). |
 | **R6** | Weekly synthesis quality | One coherent thesis with at least one tension/counterpoint; prose not bullets; lands inside the configured word band. | `### Weekly synthesis` (body_words, target band, excerpt). |
@@ -111,12 +111,11 @@ Walk the report top-down, per day:
 4. **`### Candidate alignment`** — Jaccard < 0.95 means the two providers
    weren't even reading the same paper pool (rate-limit, timing skew). Stop
    grading R1–R3 until you've noted this caveat.
-5. **`### Threshold discipline`** — there is no cap on the always_summarize
-   band; every paper clearing `always_summarize_score` is correctly included.
-   R3=2/3 when a variant consistently lands 2+ papers in that band and the
-   extras are not clearly on-priority (score inflation, not selection logic).
-   The ⚠ warning in the report flags 2+ papers in the always-summarize band
-   as a prompt to check score quality, not a misconfiguration.
+5. **`### Threshold discipline`** — papers above `max_summarized_papers` are
+   demoted to weekly interest, not dropped. R3=2/3 when a variant consistently
+   hits the cap and the extras are not clearly on-priority (score inflation, not
+   selection logic). The ⚠ warning flags cap hits as a prompt to check score
+   quality, not a misconfiguration.
 6. **`### Top-10 ranking overlap`** — this, not Selection overlap, is the
    honest R2 signal. Two providers can have selection Jaccard = 0 and Top-5
    Jaccard = 0.8 — they agree on the pool, disagree only at the very top.

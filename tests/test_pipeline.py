@@ -128,11 +128,11 @@ class FakeGenerationService:
 
 
 class FakeRanker:
-    last_always_summarize_score = None
+    last_min_summarize_score = None
 
-    def __init__(self, *, selection=None, always_summarize_score=None, **_kwargs) -> None:
+    def __init__(self, *, selection=None, min_summarize_score=None, **_kwargs) -> None:
         self.selection = selection
-        FakeRanker.last_always_summarize_score = always_summarize_score
+        FakeRanker.last_min_summarize_score = min_summarize_score
 
     def rank_papers(self, _preferences, candidates):
         selection = self.selection or _build_selection(candidates, selected=candidates[:1])
@@ -540,7 +540,7 @@ def test_pipeline_regenerates_weekly_synthesis_from_full_week_context(tmp_path: 
 
 
 def test_pipeline_writes_weekly_interest_bullets_without_leaking_them_into_synthesis(tmp_path: Path, monkeypatch) -> None:
-    config = make_app_config(tmp_path, always_summarize_score=90.0, min_selection_score=70.0)
+    config = make_app_config(tmp_path, min_summarize_score=90.0, min_selection_score=70.0)
     summarized = make_paper(arxiv_id="2603.30071", title="Summarized Paper")
     weekly_only = make_paper(
         arxiv_id="2603.30072",
@@ -584,7 +584,7 @@ def test_pipeline_writes_weekly_interest_bullets_without_leaking_them_into_synth
 def test_pipeline_writes_no_papers_placeholder_when_nothing_clears_threshold(
     tmp_path: Path, monkeypatch
 ) -> None:
-    config = make_app_config(tmp_path, always_summarize_score=90.0, min_selection_score=70.0)
+    config = make_app_config(tmp_path, min_summarize_score=90.0, min_selection_score=70.0)
     candidate = make_paper(
         arxiv_id="2603.30073",
         title="Below Threshold Paper",
@@ -616,7 +616,7 @@ def test_pipeline_writes_weekly_interest_when_nothing_selected_but_partial_match
     # Regression test: dual_match failures leave selected=[] but weekly_interest non-empty.
     # The weekly note must still receive interest bullets even when the daily note shows
     # the no-papers placeholder.
-    config = make_app_config(tmp_path, always_summarize_score=90.0, min_selection_score=70.0)
+    config = make_app_config(tmp_path, min_summarize_score=90.0, min_selection_score=70.0)
     partial_match = make_paper(
         arxiv_id="2603.30076",
         title="Partial Match Paper",
@@ -645,7 +645,7 @@ def test_pipeline_writes_weekly_interest_when_nothing_selected_but_partial_match
 
 
 def test_pipeline_still_writes_weekly_interest_when_selected_papers_all_fail(tmp_path: Path, monkeypatch) -> None:
-    config = make_app_config(tmp_path, always_summarize_score=90.0, min_selection_score=70.0)
+    config = make_app_config(tmp_path, min_summarize_score=90.0, min_selection_score=70.0)
     selected = make_paper(arxiv_id="2603.30074", title="Failing Selected Paper")
     weekly_only = make_paper(
         arxiv_id="2603.30075",
@@ -694,7 +694,7 @@ def test_pipeline_records_announcement_and_ranking_diagnostics(tmp_path: Path, m
     assert '"available_announcement_dates"' in summary_text
     assert '"visible_window_start": "2026-03-26"' in summary_text
     assert '"candidate_count": 2' in summary_text
-    assert '"always_summarize_score": 90.0' in summary_text
+    assert '"min_summarize_score": 90.0' in summary_text
     assert '"min_selection_score": 70.0' in summary_text
     assert '"ranking_results"' in summary_text
     assert '"selected_results"' in summary_text

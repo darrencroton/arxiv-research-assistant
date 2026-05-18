@@ -110,8 +110,9 @@ class AppConfig:
 
     # arxiv
     arxiv_page_size: int
-    always_summarize_score: float
+    min_summarize_score: float
     min_selection_score: float
+    max_summarized_papers: int
 
     # llm
     llm: LlmConfig
@@ -346,13 +347,21 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
     )
 
     # Arxiv
-    always_summarize_score = float(arxiv_data.get("always_summarize_score", 90.0))
-    min_selection_score = float(arxiv_data.get("min_selection_score", 70.0))
-    if always_summarize_score < min_selection_score:
+    if "always_summarize_score" in arxiv_data:
         raise ValueError(
-            "Setting [arxiv].always_summarize_score must be greater than or equal to "
+            "Setting [arxiv].always_summarize_score has been removed; "
+            "use [arxiv].min_summarize_score."
+        )
+    min_summarize_score = float(arxiv_data.get("min_summarize_score", 90.0))
+    min_selection_score = float(arxiv_data.get("min_selection_score", 70.0))
+    if min_summarize_score < min_selection_score:
+        raise ValueError(
+            "Setting [arxiv].min_summarize_score must be greater than or equal to "
             "[arxiv].min_selection_score."
         )
+    max_summarized_papers = _positive_int(
+        arxiv_data, "max_summarized_papers", "arxiv", default=3
+    )
 
     # LLM
     llm = _parse_llm_config(llm_data, "llm", root)
@@ -386,8 +395,9 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
         weekly_synthesis_word_limit_end=weekly_synthesis_word_limit_end,
         weekly_synthesis_max_tokens=weekly_synthesis_max_tokens,
         arxiv_page_size=int(arxiv_data.get("page_size", arxiv_data.get("max_results", 100))),
-        always_summarize_score=always_summarize_score,
+        min_summarize_score=min_summarize_score,
         min_selection_score=min_selection_score,
+        max_summarized_papers=max_summarized_papers,
         llm=llm,
         ranking_llm=ranking_llm,
         summary_llm=summary_llm,

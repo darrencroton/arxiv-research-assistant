@@ -178,8 +178,9 @@ def _run_summary_base(invocation_date: date, llm_stamp: dict[str, object] | None
         "visible_window_end": None,
         "candidate_count": 0,
         "candidate_keys": [],
-        "always_summarize_score": 0.0,
+        "min_summarize_score": 0.0,
         "min_selection_score": 0.0,
+        "max_summarized_papers": 0,
         "selected_paper_keys": [],
         "weekly_interest_paper_keys": [],
         "ranking_results": [],
@@ -402,8 +403,9 @@ def _run_announcement_day(
         ranker = PaperRanker(
             provider=ranking_provider,
             config=config.ranking_llm,
-            always_summarize_score=config.always_summarize_score,
+            min_summarize_score=config.min_summarize_score,
             min_selection_score=config.min_selection_score,
+            max_summarized_papers=config.max_summarized_papers,
             batch_size=config.ranking_llm.ranking_batch_size,
             prompt_logger=generation_service.prompt_logger,
         )
@@ -411,8 +413,9 @@ def _run_announcement_day(
         selected_papers = selection.selected_papers
         weekly_interest_papers = [item.paper for item in selection.weekly_interest]
 
-        run_summary["always_summarize_score"] = config.always_summarize_score
+        run_summary["min_summarize_score"] = config.min_summarize_score
         run_summary["min_selection_score"] = config.min_selection_score
+        run_summary["max_summarized_papers"] = config.max_summarized_papers
         run_summary["selected_paper_keys"] = _paper_keys(selected_papers)
         run_summary["weekly_interest_paper_keys"] = _paper_keys(weekly_interest_papers)
         run_summary["ranking_results"] = _ranking_summary(selection)

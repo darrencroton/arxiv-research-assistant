@@ -25,7 +25,7 @@ Baseline summary:
 - Reliability was clean: both providers had fatal/warnings/errors = `0/0/0`.
 - Minimax summary quality was generally useful, specific, footnoted, and numerically detailed.
 - The main weakness was selection recall and threshold behaviour, not prose length.
-- Minimax at `always_summarize_score = 90` selected counts of `3, 1, 1, 1` across the week, compared with Sonnet's `1, 2, 2, 2`.
+- Minimax at `min_summarize_score = 90` selected counts of `3, 1, 1, 1` across the week, compared with Sonnet's `1, 2, 2, 2`.
 - Important secondary papers that Minimax ranked highly but did not summarize included Matteri et al. on high-z clustering constraints and Hafezianzadeh et al. on ASTRID/LSST luminosity functions.
 - Lin et al. on DESI/EAGLE satellite metallicity was also a strong benchmark selection, but Minimax scored it `82`, below the near-top band.
 
@@ -66,12 +66,12 @@ This is intentionally light-touch. It should reduce score inflation without aski
 
 ### Near-top rescue selection
 
-The top threshold remains configured by `always_summarize_score`; for the local run this remains `90`.
+The top threshold remains configured by `min_summarize_score`; for the local run this remains `90`.
 
 The selector now adds one deterministic rescue path:
 
-- If at least one top-band paper exists, keep all papers scoring `>= always_summarize_score` as before.
-- Also rescue at most one additional paper from the band `[always_summarize_score - 5, always_summarize_score)`.
+- If at least one top-band paper exists, keep all papers scoring `>= min_summarize_score` as before.
+- Also rescue at most one additional paper from the band `[min_summarize_score - 5, min_summarize_score)`.
 - The rescue paper must be in the top three ranked candidates.
 - The rescue paper must be a dual science and method match.
 - If no paper clears the top band, the existing quiet-day behaviour remains unchanged: select the best eligible paper above `min_selection_score` so the daily note still has something useful.
@@ -82,7 +82,7 @@ This means the default local behaviour with threshold `90` is:
 - `85-89`: summarize at most one, only if top-three and dual-match
 - `70-84`: weekly interest unless no top-band paper exists, in which case the best eligible paper is used as the daily fill
 
-The intended steady state is usually `1-3` summarized papers per day. A uniquely strong day can still produce `4` if several papers genuinely clear the top band plus one near-top rescue, but that should be uncommon.
+The intended steady state is usually `1-3` summarized papers per day, bounded by `max_summarized_papers`.
 
 ## Counterfactual on the previous Minimax scores
 
@@ -241,12 +241,12 @@ Watch-outs for the next run:
 
 After reviewing the first day with both providers on the second calibration update
 (`minmax-6`), the near-top rescue rule and the separate quiet-day fallback were
-merged into a single **top-up** rule and `always_summarize_score` was raised to
+merged into a single **top-up** rule and `min_summarize_score` was raised to
 `90` for both providers.
 
 **Selector as of 2026-05-18:**
 
-1. Papers scoring `≥ always_summarize_score` with dual match → daily summary.
+1. Papers scoring `≥ min_summarize_score` with dual match → daily summary.
 2. If fewer than two papers were selected, add the best qualifying paper below
    the threshold (at most one).
 3. All papers scoring `≥ min_selection_score` not in the selected set → weekly
@@ -258,7 +258,7 @@ an unnecessary constraint that the unified "count < 2" threshold covers equally
 well. The top-3 rank constraint in the old rescue rule was dropped because the
 score already encodes relative rank; requiring both was redundant.
 
-The `always_summarize_score` change from `85` to `90` addresses Sonnet's
+The `min_summarize_score` change from `85` to `90` addresses Sonnet's
 over-selection on strong days (six papers on 2026-05-18 under the old threshold
 vs three under the new one). Equal thresholds also make provider comparisons
 cleaner.
