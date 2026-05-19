@@ -90,7 +90,7 @@ STEP-BY-STEP
     place) and post-substituting:
 
       - Label:           com.user.re-ass.<name>
-      - ProgramArguments adds: --config user_preferences/settings-<name>.toml
+      - ProgramArguments adds: --config /absolute/path/to/user_preferences/settings-<name>.toml
       - StandardOut/ErrorPath: <variant [logs].root>/launchd.{stdout,stderr}.log
         (i.e. resolved from the variant TOML, not hardcoded — so an absolute
         [logs].root is honored)
