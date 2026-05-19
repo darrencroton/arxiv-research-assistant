@@ -118,27 +118,46 @@ class GenerationService:
     ) -> str:
         """Generate or update the weekly synthesis text from all weekly additions so far."""
         try:
-            response = self._run_text_prompt(
-                (
-                    "Rewrite the weekly synthesis for this rolling research note from the full set of weekly paper "
-                    "additions gathered so far. Produce a concise markdown synthesis that explains cross-paper "
-                    "themes, methodological connections, tensions, and how the week's story is evolving. "
-                    "Prioritise synthesis over a paper-by-paper recap. Lead with the strongest cross-paper "
-                    "thread; bring in a counterpoint where one exists. Prose, not bullets — use bullets only "
-                    "when they genuinely improve readability. Keep the note quickly digestible, return markdown "
-                    f"only. You must write no more than {word_limit} words.\n\n"
-                    "Output rules: return ONLY the body text. Do NOT include any '#' or '##' headings — the "
-                    "calling note already supplies the section heading; an H1 or H2 in your output would split "
-                    "the surrounding note. Use H3 ('### ') or bold prose for any internal structure."
-                ),
-                (
-                    f"Current synthesis:\n{existing_synthesis or '(none)'}\n\n"
-                    f"Weekly paper additions so far:\n{weekly_additions or '(none)'}"
-                ),
-                max_tokens=min(self.config.max_output_tokens, max_tokens),
-                label="weekly-synthesis",
+            _max_tokens = min(self.config.max_output_tokens, max_tokens)
+            system_prompt = (
+                "Rewrite the weekly synthesis for this rolling research note from the full set of weekly paper "
+                "additions gathered so far. Produce a concise markdown synthesis that explains cross-paper "
+                "themes, methodological connections, tensions, and how the week's story is evolving. "
+                "Prioritise synthesis over a paper-by-paper recap. Lead with the strongest cross-paper "
+                "thread; bring in a counterpoint where one exists. Prose, not bullets — use bullets only "
+                "when they genuinely improve readability. When several papers share a theme, group them "
+                "under a short bold header or opening sentence — especially later in the week when the "
+                "word budget is larger. Keep the note quickly digestible, return markdown "
+                f"only. You must write no more than {word_limit} words.\n\n"
+                "Output rules: return ONLY the body text. Do NOT include any '#' or '##' headings — the "
+                "calling note already supplies the section heading; an H1 or H2 in your output would split "
+                "the surrounding note. Use H3 ('### ') or bold prose for any internal structure."
             )
+            user_prompt = (
+                f"Current synthesis:\n{existing_synthesis or '(none)'}\n\n"
+                f"Weekly paper additions so far:\n{weekly_additions or '(none)'}"
+            )
+            response = self._run_text_prompt(system_prompt, user_prompt, max_tokens=_max_tokens, label="weekly-synthesis")
             cleaned = self._clean_weekly_synthesis(response)
+            if cleaned:
+                word_count = len(cleaned.split())
+                if word_count > round(word_limit * 1.1):
+                    retry_system = (
+                        system_prompt
+                        + f"\n\nYour draft was {word_count} words — above the {word_limit}-word limit. "
+                        f"Rewrite now, staying strictly within {word_limit} words."
+                    )
+                    retry_user = (
+                        f"Overlong draft to shorten:\n{cleaned}\n\n"
+                        f"Weekly paper additions so far:\n{weekly_additions or '(none)'}"
+                    )
+                    initial_cleaned = cleaned
+                    try:
+                        response = self._run_text_prompt(retry_system, retry_user, max_tokens=_max_tokens, label="weekly-synthesis-retry")
+                        cleaned = self._clean_weekly_synthesis(response) or initial_cleaned
+                    except GenerationError as retry_error:
+                        LOGGER.warning("Weekly synthesis retry failed, using truncated initial draft: %s", retry_error)
+                        cleaned = initial_cleaned
             if cleaned:
                 return self._truncate_markdown_words(cleaned, limit=round(word_limit * 1.25))
         except GenerationError as error:

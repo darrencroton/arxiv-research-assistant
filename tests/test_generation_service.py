@@ -40,6 +40,22 @@ class RecordingProvider:
         return self.response
 
 
+class MultiResponseProvider:
+    """Returns each response in sequence; repeats the last one when exhausted."""
+
+    def __init__(self, *responses: str) -> None:
+        self._responses = list(responses)
+        self.calls: list[dict[str, object]] = []
+
+    def validate_runtime_ready(self) -> None:
+        return None
+
+    def process_document(self, **kwargs):
+        self.calls.append(kwargs)
+        index = min(len(self.calls) - 1, len(self._responses) - 1)
+        return self._responses[index]
+
+
 class FailingTextProvider:
     def validate_runtime_ready(self) -> None:
         return None
@@ -125,7 +141,9 @@ def test_generate_weekly_synthesis_uses_full_weekly_additions_and_word_limit(tmp
                 "themes, methodological connections, tensions, and how the week's story is evolving. "
                 "Prioritise synthesis over a paper-by-paper recap. Lead with the strongest cross-paper "
                 "thread; bring in a counterpoint where one exists. Prose, not bullets — use bullets only "
-                "when they genuinely improve readability. Keep the note quickly digestible, return markdown "
+                "when they genuinely improve readability. When several papers share a theme, group them "
+                "under a short bold header or opening sentence — especially later in the week when the "
+                "word budget is larger. Keep the note quickly digestible, return markdown "
                 "only. You must write no more than 150 words.\n\n"
                 "Output rules: return ONLY the body text. Do NOT include any '#' or '##' headings — the "
                 "calling note already supplies the section heading; an H1 or H2 in your output would split "
@@ -187,7 +205,8 @@ def test_generate_weekly_synthesis_demotes_h1_and_h2_headings_in_model_output(tm
 
 
 def test_generate_weekly_synthesis_enforces_125_percent_buffer(tmp_path: Path) -> None:
-    # 9-word response, word_limit=6 → enforcement at round(6*1.25)=8 words → truncated
+    # cleaned split-tokens: 11 (dashes count), word_limit=6 → 11 > round(6*1.1)=7 → retry fires
+    # RecordingProvider returns same response; final truncation at round(6*1.25)=8 tokens → ellipsis
     provider = RecordingProvider(response="Overview paragraph.\n\n- First theme with context\n- Second theme follows")
     service = GenerationService(
         config=make_app_config(tmp_path).llm,
@@ -198,6 +217,59 @@ def test_generate_weekly_synthesis_enforces_125_percent_buffer(tmp_path: Path) -
     synthesis = service.generate_weekly_synthesis("Earlier synthesis.", "**Summary:** First summary.\n", word_limit=6)
 
     assert synthesis == "Overview paragraph.\n\n- First theme with context\n- Second theme..."
+
+
+def test_generate_weekly_synthesis_retries_when_response_exceeds_110_percent(tmp_path: Path) -> None:
+    overlong = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu"  # 12 words, >10% over limit
+    short = "alpha beta gamma delta epsilon."  # 5 words, well within word_limit=10
+    provider = MultiResponseProvider(overlong, short)
+    service = GenerationService(
+        config=make_app_config(tmp_path).llm,
+        provider=provider,
+        paper_summariser=StubPaperSummariser(),
+    )
+    weekly_additions = "**Summary:** Some paper summary.\n"
+
+    synthesis = service.generate_weekly_synthesis("Earlier synthesis.", weekly_additions, word_limit=10)
+
+    assert synthesis == "alpha beta gamma delta epsilon."
+    assert len(provider.calls) == 2
+    # Retry system prompt names the overage
+    assert "12 words" in provider.calls[1]["system_prompt"]
+    assert "10-word limit" in provider.calls[1]["system_prompt"]
+    # Retry user prompt leads with the overlong draft, not the original synthesis
+    assert provider.calls[1]["user_prompt"].startswith("Overlong draft to shorten:\n")
+    assert "alpha beta gamma delta" in provider.calls[1]["user_prompt"]
+
+
+def test_generate_weekly_synthesis_retry_failure_truncates_initial_draft(tmp_path: Path) -> None:
+    overlong = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu"  # 12 words, >10% over limit=10
+
+    class FailOnRetry:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def validate_runtime_ready(self) -> None:
+            return None
+
+        def process_document(self, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return overlong
+            raise RuntimeError("synthetic retry failure")
+
+    provider = FailOnRetry()
+    service = GenerationService(
+        config=make_app_config(tmp_path).llm,
+        provider=provider,
+        paper_summariser=StubPaperSummariser(),
+    )
+
+    synthesis = service.generate_weekly_synthesis("Earlier synthesis.", "**Summary:** Some paper summary.\n", word_limit=10)
+
+    # Retry fails → initial draft preserved; 12 words ≤ round(10*1.25)=13 → no truncation, full draft returned
+    assert synthesis == overlong
+    assert provider.calls == 2
 
 
 def test_generate_weekly_synthesis_fallback_rebuilds_from_all_weekly_summaries(tmp_path: Path) -> None:
