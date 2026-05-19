@@ -4,7 +4,7 @@ set -euo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "$script_dir/../.." && pwd)"
 
-default_source="$repo_root/tmp/launchd/com.user.re-ass.plist"
+default_source="$repo_root/logs/launchd/com.user.re-ass.plist"
 source_plist="${1:-$default_source}"
 launch_agents_dir="$HOME/Library/LaunchAgents"
 installed_plist="$launch_agents_dir/com.user.re-ass.plist"

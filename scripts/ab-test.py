@@ -90,7 +90,7 @@ STEP-BY-STEP
     place) and post-substituting:
 
       - Label:           com.user.re-ass.<name>
-      - ProgramArguments adds: --config user_preferences/settings-<name>.toml
+      - ProgramArguments adds: --config /absolute/path/to/user_preferences/settings-<name>.toml
       - StandardOut/ErrorPath: <variant [logs].root>/launchd.{stdout,stderr}.log
         (i.e. resolved from the variant TOML, not hardcoded — so an absolute
         [logs].root is honored)
@@ -338,7 +338,7 @@ def cmd_schedule(args: argparse.Namespace) -> int:
     variant_plist_text = _patch_plist_for_variant(
         plist_text=plist_text,
         name=name,
-        config_path=variant_settings.relative_to(REPO_ROOT).as_posix(),
+        config_path=variant_settings.as_posix(),
         log_dir=variant_paths.logs_root,
         hour=args.hour,
         minute=args.minute,

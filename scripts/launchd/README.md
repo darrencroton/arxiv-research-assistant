@@ -47,7 +47,7 @@ From the repo root:
 This writes the rendered plist to:
 
 ```text
-tmp/launchd/com.user.re-ass.plist
+logs/launchd/com.user.re-ass.plist
 ```
 
 The rendered plist contains absolute paths for `uv`, the repo root, and the log directory. If you move this repo, reinstall `uv` somewhere else, or want to pick up a different `uv` binary, rerun `./scripts/launchd/render-plist.sh` and reinstall the LaunchAgent.
@@ -107,12 +107,12 @@ From the repo root, run:
 ./scripts/launchd/install-plist.sh
 ```
 
-This installs `tmp/launchd/com.user.re-ass.plist`, validates it, copies it into `~/Library/LaunchAgents/`, and reloads the LaunchAgent.
+This installs `logs/launchd/com.user.re-ass.plist`, validates it, copies it into `~/Library/LaunchAgents/`, and reloads the LaunchAgent.
 
 The intended workflow is:
 
 1. Run `./scripts/launchd/render-plist.sh`
-2. Edit `tmp/launchd/com.user.re-ass.plist` if you want a custom schedule
+2. Edit `logs/launchd/com.user.re-ass.plist` if you want a custom schedule
 3. Run `./scripts/launchd/install-plist.sh`
 
 You can also pass an explicit plist path as the first argument if you want to install a different file.
