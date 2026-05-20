@@ -145,20 +145,21 @@ class GenerationService:
                 for retry_index in range(1, self.config.retry_attempts + 1):
                     if word_count <= overage_limit:
                         break
+                    overage = word_count - word_limit
                     retry_system = (
                         system_prompt
-                        + f"\n\nYour draft was {word_count} words — above the {word_limit}-word limit. "
-                        f"Rewrite now, staying strictly within {word_limit} words. "
-                        "Remember: You do not need to cover every paper individually. Consolidate overlapping "
-                        "results, omit weaker or less connected details, and keep only the strongest themes, "
-                        "tensions, and narrative for a quick big-picture synthesis."
+                        + f"\n\nALERT! Your draft was {word_count} words — {overage} words over the {word_limit}-word limit. "
+                        f"Rewrite it now, cutting aggressively. You do NOT need to cover every paper. "
+                        "Drop weaker results, merge overlapping points, and keep only the strongest themes and tensions. "
+                        f"Stop writing when you reach {word_limit} words. Do not return a draft that exceeds the limit."
                     )
                     retry_user = (
                         f"Overlong draft to shorten:\n{cleaned}\n\n"
                         f"Weekly paper additions so far:\n{weekly_additions or '(none)'}"
                     )
+                    retry_max_tokens = round(word_limit * 2)
                     try:
-                        response = self._run_text_prompt(retry_system, retry_user, max_tokens=_max_tokens, label="weekly-synthesis-retry")
+                        response = self._run_text_prompt(retry_system, retry_user, max_tokens=retry_max_tokens, label="weekly-synthesis-retry")
                         cleaned = self._clean_weekly_synthesis(response) or cleaned
                         word_count = len(cleaned.split())
                     except GenerationError as retry_error:
