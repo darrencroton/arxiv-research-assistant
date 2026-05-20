@@ -91,9 +91,10 @@ STEP-BY-STEP
 
       - Label:           com.user.re-ass.<name>
       - ProgramArguments adds: --config /absolute/path/to/user_preferences/settings-<name>.toml
-      - StandardOut/ErrorPath: <variant [logs].root>/launchd.{stdout,stderr}.log
-        (i.e. resolved from the variant TOML, not hardcoded — so an absolute
-        [logs].root is honored)
+      - StandardOut/ErrorPath: repo-local logs/launchd/<label>.{stdout,stderr}.log.
+        The application logs themselves still use the variant TOML [logs].root;
+        launchd stream logs stay repo-local because LaunchAgents can fail before
+        exec when stdout/stderr points at some cloud-backed or protected folders.
       - StartCalendarInterval: same Hour as benchmark, Minute +30 by default
         (configurable via --hour / --minute). The 30-minute offset keeps both
         sides visible to the same arXiv listing window without competing for
@@ -228,10 +229,23 @@ KEY_VALUE_RE = re.compile(r'^(\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*=\s*)"([^"]*)"(.*)
 
 def cmd_setup(args: argparse.Namespace) -> int:
     name = _validate_variant(args.name)
-    target = USER_PREFS / f"settings-{name}.toml"
+    target = _variant_settings_path(name)
 
     if not BENCHMARK_SETTINGS.exists():
         print(f"error: benchmark config not found: {BENCHMARK_SETTINGS}", file=sys.stderr)
+        return 1
+    if _same_existing_path(target, BENCHMARK_SETTINGS):
+        print(
+            f"error: refusing to overwrite benchmark config path: {target}",
+            file=sys.stderr,
+        )
+        return 1
+    if target.is_symlink():
+        print(
+            f"error: refusing to overwrite symlinked variant config: {target}. "
+            "Archive or remove the symlink by hand first.",
+            file=sys.stderr,
+        )
         return 1
     if target.exists() and not args.force:
         print(f"error: {target} already exists. Pass --force to overwrite.", file=sys.stderr)
@@ -314,9 +328,15 @@ def _apply_rule(rule: str, value: str, name: str) -> str:
 
 def cmd_schedule(args: argparse.Namespace) -> int:
     name = _validate_variant(args.name)
-    variant_settings = USER_PREFS / f"settings-{name}.toml"
+    variant_settings = _variant_settings_path(name)
     if not variant_settings.exists():
         print(f"error: {variant_settings} does not exist. Run `setup --name {name}` first.", file=sys.stderr)
+        return 1
+    if _same_existing_path(variant_settings, BENCHMARK_SETTINGS):
+        print(
+            f"error: refusing to schedule benchmark config as variant: {variant_settings}",
+            file=sys.stderr,
+        )
         return 1
 
     if shutil.which("launchctl") is None:
@@ -334,18 +354,26 @@ def cmd_schedule(args: argparse.Namespace) -> int:
         return 1
 
     variant_paths = _resolve_variant_paths(name, variant_settings)
+    # launchd opens stdout/stderr before execing the program. Create the
+    # application log directory before bootstrap so the app can open its own
+    # files immediately after launch. launchd's own stdout/stderr stay under
+    # repo-local logs/launchd; some cloud-backed/protected folders cause
+    # LaunchAgents to fail with EX_CONFIG before exec.
+    variant_paths.logs_root.mkdir(parents=True, exist_ok=True)
+
+    rendered_dir = REPO_ROOT / "logs" / "launchd"
+    rendered_dir.mkdir(parents=True, exist_ok=True)
+
     plist_text = RENDERED_BENCHMARK_PLIST.read_text(encoding="utf-8")
     variant_plist_text = _patch_plist_for_variant(
         plist_text=plist_text,
         name=name,
         config_path=variant_settings.as_posix(),
-        log_dir=variant_paths.logs_root,
+        log_dir=rendered_dir,
         hour=args.hour,
         minute=args.minute,
     )
 
-    rendered_dir = REPO_ROOT / "logs" / "launchd"
-    rendered_dir.mkdir(parents=True, exist_ok=True)
     rendered_variant = rendered_dir / f"com.user.re-ass.{name}.plist"
     rendered_variant.write_text(variant_plist_text, encoding="utf-8")
     print(f"Rendered: {rendered_variant.relative_to(REPO_ROOT)}")
@@ -361,14 +389,15 @@ def cmd_schedule(args: argparse.Namespace) -> int:
 
     domain = f"gui/{os.getuid()}"
     label = f"com.user.re-ass.{name}"
-    subprocess.run(["launchctl", "bootout", domain, str(installed)],
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(
+        ["launchctl", "bootout", f"{domain}/{label}"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
     bootstrap = subprocess.run(["launchctl", "bootstrap", domain, str(installed)])
     if bootstrap.returncode != 0:
         print("error: launchctl bootstrap failed.", file=sys.stderr)
         return bootstrap.returncode
-
-    variant_paths.logs_root.mkdir(parents=True, exist_ok=True)
 
     try:
         logs_display = variant_paths.logs_root.relative_to(REPO_ROOT)
@@ -377,7 +406,8 @@ def cmd_schedule(args: argparse.Namespace) -> int:
     print(f"\nInstalled LaunchAgent: {installed}")
     print(f"Service:               {domain}/{label}")
     print(f"Schedule:              {_format_schedule_for_display(variant_plist_text)}")
-    print(f"Logs land in:          {logs_display}/launchd.{{stdout,stderr}}.log")
+    print(f"App logs land in:      {logs_display}/{{last-run,history}}.log")
+    print(f"launchd streams in:    logs/launchd/com.user.re-ass.{name}.{{stdout,stderr}}.log")
     print("\nKick off a real run now (uses today's arXiv listing):")
     print(f"  launchctl kickstart -k {domain}/{label}")
     print("\nVerify both jobs are loaded:")
@@ -402,8 +432,8 @@ def _patch_plist_for_variant(
         minute,
     )
     log_dir_str = log_dir.as_posix()
-    data["StandardOutPath"] = f"{log_dir_str}/launchd.stdout.log"
-    data["StandardErrorPath"] = f"{log_dir_str}/launchd.stderr.log"
+    data["StandardOutPath"] = f"{log_dir_str}/{label}.stdout.log"
+    data["StandardErrorPath"] = f"{log_dir_str}/{label}.stderr.log"
     return plistlib.dumps(data, sort_keys=False).decode("utf-8")
 
 
@@ -1574,13 +1604,19 @@ def _section_scoreboard(
 def cmd_cleanup(args: argparse.Namespace) -> int:
     name = _validate_variant(args.name)
 
-    settings_path = USER_PREFS / f"settings-{name}.toml"
+    settings_path = _variant_settings_path(name)
     archived_to: Path | None = None
     if settings_path.exists():
+        if _same_existing_path(settings_path, BENCHMARK_SETTINGS):
+            print(
+                f"error: refusing to archive benchmark config path as a variant: {settings_path}",
+                file=sys.stderr,
+            )
+            return 1
         ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
         ts = dt.datetime.now().strftime("%Y%m%dT%H%M%S")
         archived_to = ARCHIVE_DIR / f"settings-{name}-{ts}.toml"
-        shutil.move(str(settings_path), str(archived_to))
+        settings_path.rename(archived_to)
         print(f"Archived {settings_path.relative_to(REPO_ROOT)} -> {archived_to.relative_to(REPO_ROOT)}")
     else:
         print(f"(no {settings_path.relative_to(REPO_ROOT)} to archive)")
@@ -1618,6 +1654,25 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 # argparse
 # ---------------------------------------------------------------------------
+
+
+def _variant_settings_path(name: str) -> Path:
+    """Return the only settings path a variant command may mutate."""
+    expected_name = f"settings-{name}.toml"
+    path = USER_PREFS / expected_name
+    if path.name != expected_name or path.parent != USER_PREFS:
+        raise RuntimeError(f"internal error: unsafe variant settings path computed: {path}")
+    if path == BENCHMARK_SETTINGS or path.name == "settings.toml":
+        raise RuntimeError(f"internal error: variant path targets benchmark settings: {path}")
+    return path
+
+
+def _same_existing_path(left: Path, right: Path) -> bool:
+    """True when two existing paths identify the same filesystem object."""
+    try:
+        return left.resolve(strict=True) == right.resolve(strict=True)
+    except FileNotFoundError:
+        return False
 
 
 def _validate_variant(name: str) -> str:
