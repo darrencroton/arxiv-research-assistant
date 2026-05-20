@@ -141,25 +141,35 @@ class GenerationService:
             cleaned = self._clean_weekly_synthesis(response)
             if cleaned:
                 word_count = len(cleaned.split())
-                if word_count > round(word_limit * 1.1):
+                overage_limit = round(word_limit * 1.1)
+                for retry_index in range(1, self.config.retry_attempts + 1):
+                    if word_count <= overage_limit:
+                        break
                     retry_system = (
                         system_prompt
                         + f"\n\nYour draft was {word_count} words — above the {word_limit}-word limit. "
-                        f"Rewrite now, staying strictly within {word_limit} words."
+                        f"Rewrite now, staying strictly within {word_limit} words. "
+                        "Remember: You do not need to cover every paper individually. Consolidate overlapping "
+                        "results, omit weaker or less connected details, and keep only the strongest themes, "
+                        "tensions, and narrative for a quick big-picture synthesis."
                     )
                     retry_user = (
                         f"Overlong draft to shorten:\n{cleaned}\n\n"
                         f"Weekly paper additions so far:\n{weekly_additions or '(none)'}"
                     )
-                    initial_cleaned = cleaned
                     try:
                         response = self._run_text_prompt(retry_system, retry_user, max_tokens=_max_tokens, label="weekly-synthesis-retry")
-                        cleaned = self._clean_weekly_synthesis(response) or initial_cleaned
+                        cleaned = self._clean_weekly_synthesis(response) or cleaned
+                        word_count = len(cleaned.split())
                     except GenerationError as retry_error:
-                        LOGGER.warning("Weekly synthesis retry failed, using truncated initial draft: %s", retry_error)
-                        cleaned = initial_cleaned
+                        LOGGER.warning(
+                            "Weekly synthesis retry %s/%s failed, preserving current draft: %s",
+                            retry_index,
+                            self.config.retry_attempts,
+                            retry_error,
+                        )
             if cleaned:
-                return self._truncate_markdown_words(cleaned, limit=round(word_limit * 1.25))
+                return self._truncate_markdown_words(cleaned, limit=round(word_limit * 1.1))
         except GenerationError as error:
             LOGGER.warning("Weekly synthesis generation failed: %s", error)
 

@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -204,9 +205,9 @@ def test_generate_weekly_synthesis_demotes_h1_and_h2_headings_in_model_output(tm
     assert "Body paragraph." in lines
 
 
-def test_generate_weekly_synthesis_enforces_125_percent_buffer(tmp_path: Path) -> None:
+def test_generate_weekly_synthesis_enforces_110_percent_buffer(tmp_path: Path) -> None:
     # cleaned split-tokens: 11 (dashes count), word_limit=6 → 11 > round(6*1.1)=7 → retry fires
-    # RecordingProvider returns same response; final truncation at round(6*1.25)=8 tokens → ellipsis
+    # RecordingProvider returns same response; final truncation at round(6*1.1)=7 tokens → ellipsis
     provider = RecordingProvider(response="Overview paragraph.\n\n- First theme with context\n- Second theme follows")
     service = GenerationService(
         config=make_app_config(tmp_path).llm,
@@ -216,13 +217,15 @@ def test_generate_weekly_synthesis_enforces_125_percent_buffer(tmp_path: Path) -
 
     synthesis = service.generate_weekly_synthesis("Earlier synthesis.", "**Summary:** First summary.\n", word_limit=6)
 
-    assert synthesis == "Overview paragraph.\n\n- First theme with context\n- Second theme..."
+    assert synthesis == "Overview paragraph.\n\n- First theme with context\n- Second..."
+    assert len(provider.calls) == 4
 
 
-def test_generate_weekly_synthesis_retries_when_response_exceeds_110_percent(tmp_path: Path) -> None:
+def test_generate_weekly_synthesis_retries_until_response_is_within_110_percent(tmp_path: Path) -> None:
     overlong = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu"  # 12 words, >10% over limit
+    still_overlong = "one two three four five six seven eight nine ten eleven twelve"  # 12 words, >10% over limit
     short = "alpha beta gamma delta epsilon."  # 5 words, well within word_limit=10
-    provider = MultiResponseProvider(overlong, short)
+    provider = MultiResponseProvider(overlong, still_overlong, short)
     service = GenerationService(
         config=make_app_config(tmp_path).llm,
         provider=provider,
@@ -233,16 +236,36 @@ def test_generate_weekly_synthesis_retries_when_response_exceeds_110_percent(tmp
     synthesis = service.generate_weekly_synthesis("Earlier synthesis.", weekly_additions, word_limit=10)
 
     assert synthesis == "alpha beta gamma delta epsilon."
-    assert len(provider.calls) == 2
+    assert len(provider.calls) == 3
     # Retry system prompt names the overage
     assert "12 words" in provider.calls[1]["system_prompt"]
     assert "10-word limit" in provider.calls[1]["system_prompt"]
+    assert "12 words" in provider.calls[2]["system_prompt"]
+    assert "Remember: You do not need to cover every paper individually." in provider.calls[1]["system_prompt"]
+    assert "Consolidate overlapping results, omit weaker or less connected details" in provider.calls[1]["system_prompt"]
     # Retry user prompt leads with the overlong draft, not the original synthesis
     assert provider.calls[1]["user_prompt"].startswith("Overlong draft to shorten:\n")
     assert "alpha beta gamma delta" in provider.calls[1]["user_prompt"]
 
 
-def test_generate_weekly_synthesis_retry_failure_truncates_initial_draft(tmp_path: Path) -> None:
+def test_generate_weekly_synthesis_uses_configured_retry_attempts_before_truncating(tmp_path: Path) -> None:
+    overlong = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu"  # 12 words, >10% over limit=10
+    provider = RecordingProvider(response=overlong)
+    config = replace(make_app_config(tmp_path).llm, retry_attempts=2)
+    service = GenerationService(
+        config=config,
+        provider=provider,
+        paper_summariser=StubPaperSummariser(),
+    )
+
+    synthesis = service.generate_weekly_synthesis("Earlier synthesis.", "**Summary:** Some paper summary.\n", word_limit=10)
+
+    assert synthesis == "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda..."
+    assert len(provider.calls) == 3
+    assert all(call["max_tokens"] == 4096 for call in provider.calls)
+
+
+def test_generate_weekly_synthesis_retry_failures_still_use_configured_attempts(tmp_path: Path) -> None:
     overlong = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu"  # 12 words, >10% over limit=10
 
     class FailOnRetry:
@@ -259,17 +282,17 @@ def test_generate_weekly_synthesis_retry_failure_truncates_initial_draft(tmp_pat
             raise RuntimeError("synthetic retry failure")
 
     provider = FailOnRetry()
+    config = replace(make_app_config(tmp_path).llm, retry_attempts=2)
     service = GenerationService(
-        config=make_app_config(tmp_path).llm,
+        config=config,
         provider=provider,
         paper_summariser=StubPaperSummariser(),
     )
 
     synthesis = service.generate_weekly_synthesis("Earlier synthesis.", "**Summary:** Some paper summary.\n", word_limit=10)
 
-    # Retry fails → initial draft preserved; 12 words ≤ round(10*1.25)=13 → no truncation, full draft returned
-    assert synthesis == overlong
-    assert provider.calls == 2
+    assert synthesis == "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda..."
+    assert provider.calls == 3
 
 
 def test_generate_weekly_synthesis_fallback_rebuilds_from_all_weekly_summaries(tmp_path: Path) -> None:
