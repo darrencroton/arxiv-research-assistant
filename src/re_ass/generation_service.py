@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from pathlib import Path
 import re
 
@@ -145,21 +146,19 @@ class GenerationService:
                 for retry_index in range(1, self.config.retry_attempts + 1):
                     if word_count <= overage_limit:
                         break
-                    overage = word_count - word_limit
+                    overage_pct = (word_count - word_limit) / word_count * 100
+                    shorten_by = math.ceil(overage_pct / 5) * 5 + 5
                     retry_system = (
-                        system_prompt
-                        + f"\n\nALERT! Your draft was {word_count} words — {overage} words over the {word_limit}-word limit. "
-                        f"Rewrite it now, cutting aggressively. You do NOT need to cover every paper. "
+                        "You are an expert editor. A weekly synthesis is a concise markdown narrative that explains "
+                        "cross-paper themes, connections, and tensions from a week of research papers. It prioritises "
+                        "synthesis over a paper-by-paper recap and leads with the strongest cross-paper insights. "
+                        f"Your task is to shorten the synthesis below by {shorten_by}%. "
                         "Drop weaker results, merge overlapping points, and keep only the strongest themes and tensions. "
-                        f"Stop writing when you reach {word_limit} words. Do not return a draft that exceeds the limit."
+                        "Return only the shortened synthesis in the same markdown style."
                     )
-                    retry_user = (
-                        f"Overlong draft to shorten:\n{cleaned}\n\n"
-                        f"Weekly paper additions so far:\n{weekly_additions or '(none)'}"
-                    )
-                    retry_max_tokens = round(word_limit * 2)
+                    retry_user = f"Synthesis to shorten:\n\n{cleaned}"
                     try:
-                        response = self._run_text_prompt(retry_system, retry_user, max_tokens=retry_max_tokens, label="weekly-synthesis-retry")
+                        response = self._run_text_prompt(retry_system, retry_user, max_tokens=_max_tokens, label="weekly-synthesis-retry")
                         cleaned = self._clean_weekly_synthesis(response) or cleaned
                         word_count = len(cleaned.split())
                     except GenerationError as retry_error:
