@@ -137,8 +137,8 @@ def test_generate_weekly_synthesis_uses_full_weekly_additions_and_word_limit(tmp
             "content": "",
             "is_pdf": False,
             "system_prompt": (
-                "Rewrite the weekly synthesis for this rolling research note from the full set of weekly paper "
-                "additions gathered so far. Produce a concise markdown synthesis that explains cross-paper "
+                "Write the weekly synthesis for this rolling research note from the full set of weekly paper "
+                "additions gathered so far. Produce a concise, standalone markdown synthesis that explains cross-paper "
                 "themes, methodological connections, tensions, and how the week's story is evolving. "
                 "Prioritise synthesis over a paper-by-paper recap. Lead with the strongest cross-paper "
                 "thread; bring in a counterpoint where one exists. Prose, not bullets — use bullets only "
@@ -151,7 +151,6 @@ def test_generate_weekly_synthesis_uses_full_weekly_additions_and_word_limit(tmp
                 "the surrounding note. Use H3 ('### ') or bold prose for any internal structure."
             ),
             "user_prompt": (
-                "Current synthesis:\nEarlier synthesis.\n\n"
                 "Weekly paper additions so far:\n"
                 "### Monday 23rd\n\n"
                 "**Title:** [[Paper One]]\n\n"
