@@ -236,15 +236,14 @@ def test_generate_weekly_synthesis_retries_until_response_is_within_110_percent(
 
     assert synthesis == "alpha beta gamma delta epsilon."
     assert len(provider.calls) == 3
-    # Retry system prompt names the overage
-    assert "12 words" in provider.calls[1]["system_prompt"]
-    assert "10-word limit" in provider.calls[1]["system_prompt"]
-    assert "12 words" in provider.calls[2]["system_prompt"]
-    assert "Remember: You do not need to cover every paper individually." in provider.calls[1]["system_prompt"]
-    assert "Consolidate overlapping results, omit weaker or less connected details" in provider.calls[1]["system_prompt"]
-    # Retry user prompt leads with the overlong draft, not the original synthesis
-    assert provider.calls[1]["user_prompt"].startswith("Overlong draft to shorten:\n")
+    # Retry is a blind editing task: percentage-based, no word counts, no reference to original additions
+    assert "shorten the synthesis below by" in provider.calls[1]["system_prompt"]
+    assert "shorten the synthesis below by" in provider.calls[2]["system_prompt"]
+    assert provider.calls[1]["user_prompt"].startswith("Synthesis to shorten:\n\n")
     assert "alpha beta gamma delta" in provider.calls[1]["user_prompt"]
+    # Retry does not include the weekly additions or original synthesis context
+    assert "Weekly paper additions" not in provider.calls[1]["user_prompt"]
+    assert "Earlier synthesis" not in provider.calls[1]["user_prompt"]
 
 
 def test_generate_weekly_synthesis_uses_configured_retry_attempts_before_truncating(tmp_path: Path) -> None:

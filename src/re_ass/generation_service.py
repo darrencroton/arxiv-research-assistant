@@ -149,12 +149,11 @@ class GenerationService:
                         "You are an expert editor. A weekly synthesis is a concise markdown narrative that explains "
                         "cross-paper themes, connections, and tensions from a week of research papers. It prioritises "
                         "synthesis over a paper-by-paper recap and leads with the strongest cross-paper insights. "
-                        f"The draft below is {word_count} words but must fit within the {word_limit}-word limit. "
-                        "Consolidate overlapping results, omit weaker or less connected details, and tighten the prose. "
-                        "Remember: You do not need to cover every paper individually. "
+                        f"Your task is to shorten the synthesis below by {shorten_by}%. "
+                        "Drop weaker results, merge overlapping points, and keep only the strongest themes and tensions. "
                         "Return only the shortened synthesis in the same markdown style."
                     )
-                    retry_user = f"Overlong draft to shorten:\n\n{cleaned}"
+                    retry_user = f"Synthesis to shorten:\n\n{cleaned}"
                     try:
                         response = self._run_text_prompt(retry_system, retry_user, max_tokens=_max_tokens, label="weekly-synthesis-retry")
                         cleaned = self._clean_weekly_synthesis(response) or cleaned
