@@ -81,7 +81,9 @@ class GenerationService:
         """Generate a 1-2 sentence micro-summary from title and abstract."""
         try:
             response = self._run_text_prompt(
-                "Summarise the following arXiv abstract in 1-2 sentences. Return plain text only.",
+                "Summarise the following arXiv abstract in 1-2 sentences. "
+                "Use present tense and make the work itself the subject: e.g. “using X … this study finds …”, "
+                "“observations of Y reveal …” etc. Return plain text only.",
                 f"Title: {paper.title}\nAbstract: {paper.summary}",
                 max_tokens=min(self.config.max_output_tokens, 512),
                 label="micro-summary",
