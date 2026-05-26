@@ -1601,10 +1601,53 @@ def _section_scoreboard(
 # ---------------------------------------------------------------------------
 
 
+def _cleanup_runtime_dirs(name: str, settings_path: Path) -> list[tuple[str, Path]]:
+    """Return the three runtime root paths for a variant, read from its settings file.
+
+    Must be called *before* the settings file is archived so it can still be
+    read.  Falls back to the conventional repo-relative names
+    (``output-{name}``, ``state-{name}``, ``logs-{name}``) if the file does not
+    exist or cannot be parsed — matching the old hardcoded path check.
+
+    Returns a list of ``(label, resolved_path)`` pairs for
+    ``[output] root``, ``[state] root``, and ``[logs] root``.
+    """
+    fallback = [
+        ("[output] root", REPO_ROOT / f"output-{name}"),
+        ("[state] root",  REPO_ROOT / f"state-{name}"),
+        ("[logs] root",   REPO_ROOT / f"logs-{name}"),
+    ]
+    if not settings_path.exists():
+        return fallback
+    try:
+        data = tomllib.loads(settings_path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return fallback
+
+    result: list[tuple[str, Path]] = []
+    for section, key, default in (
+        ("output", "root", "output"),
+        ("state",  "root", "state"),
+        ("logs",   "root", "logs"),
+    ):
+        raw = data.get(section, {}).get(key, default)
+        expanded = Path(os.path.expanduser(raw))
+        if not expanded.is_absolute():
+            expanded = (REPO_ROOT / expanded).resolve()
+        result.append((f"[{section}] {key}", expanded))
+    return result
+
+
 def cmd_cleanup(args: argparse.Namespace) -> int:
     name = _validate_variant(args.name)
 
     settings_path = _variant_settings_path(name)
+
+    # Resolve the variant's runtime root directories *before* the settings file
+    # is renamed/archived below — once renamed it can no longer be read at its
+    # original location.
+    runtime_dirs = _cleanup_runtime_dirs(name, settings_path)
+
     archived_to: Path | None = None
     if settings_path.exists():
         if _same_existing_path(settings_path, BENCHMARK_SETTINGS):
@@ -1637,12 +1680,31 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
     else:
         print(f"(no launchd job to uninstall: {label})")
 
-    print("\n*-{n}/ directories were NOT touched. To archive them too:".format(n=name))
-    for sub in (f"output-{name}", f"state-{name}", f"logs-{name}"):
-        full = REPO_ROOT / sub
-        if full.exists():
-            print(f"  mv {full.relative_to(REPO_ROOT)} archive/ab-test/{sub}-$(date -u +%Y%m%dT%H%M%S)/")
-    print("(Note: any output paths inside iCloud or Dropbox vaults — e.g. summaries_dir / pdfs_dir — live outside the repo and must be moved by hand.)")
+    # Print archive hints for runtime directories.  Directories inside the
+    # repo get a ready-to-run `mv` command; directories outside the repo
+    # (absolute/tilde paths, e.g. an iCloud vault or a bespoke test dir) are
+    # listed separately so the user knows what to handle by hand.
+    print("\nRuntime directories were NOT touched. To archive them too:")
+    any_found = False
+    manual: list[tuple[str, Path]] = []
+    for dir_label, full in runtime_dirs:
+        if not full.exists():
+            continue
+        any_found = True
+        try:
+            rel = full.relative_to(REPO_ROOT)
+            archive_name = f"{rel.name}-$(date -u +%Y%m%dT%H%M%S)"
+            print(f"  mv {rel} archive/ab-test/{archive_name}/")
+        except ValueError:
+            manual.append((dir_label, full))
+    if manual:
+        print("The following are outside the repo and must be moved by hand:")
+        for dir_label, full in manual:
+            print(f"  {dir_label}: {full}")
+        any_found = True
+    if not any_found:
+        print("  (none found — directories may not have been created yet)")
+    print("(Note: output paths inside iCloud or Dropbox vaults — e.g. summaries_dir / pdfs_dir — live outside the repo and must be moved by hand.)")
 
     if args.remove_script:
         print("\nTo also archive this script and revert .gitignore (run by hand):")

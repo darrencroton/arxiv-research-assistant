@@ -129,7 +129,7 @@ class GenerationService:
                 "Prioritise synthesis over a paper-by-paper recap. Lead with the strongest cross-paper "
                 "thread; bring in a counterpoint where one exists. Prose, not bullets — use bullets only "
                 "when they genuinely improve readability. When several papers share a theme, group them "
-                "under a short bold header or opening sentence — especially later in the week when the "
+                "under a short bold header or opening sentence and use paragraphs — especially later in the week when the "
                 "word budget is larger. Keep the note quickly digestible, return markdown "
                 f"only. You must write no more than {word_limit} words.\n\n"
                 "Output rules: return ONLY the body text. Do NOT include any '#' or '##' headings — the "
