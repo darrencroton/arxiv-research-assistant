@@ -43,7 +43,7 @@ page_size = 100
 
 [llm]
 mode = "cli"
-provider = "copilot"
+provider = "claude"
 model = ""
 effort = "high"
 timeout_seconds = 1200
@@ -57,18 +57,17 @@ env_file = ""
 download_timeout_seconds = 120
 max_pdf_size_mb = 100
 marker_timeout_seconds = 300
-ollama_base_url = "http://localhost:11434"
 ranking_batch_size = 0  # 0 = no batching; set to e.g. 25 for local models that truncate large outputs
 
 # Optional: override specific fields for ranking only.
 # Any field omitted here falls back to [llm]. Only specify what differs.
 # [llm-ranking]
 # provider = "openai-compatible"
-# model = "qwen2.5-coder-32b-instruct"
+# model = "minimax/minimax-m2.7-q8"
 # base_url = "http://127.0.0.1:1234/v1"
 
 # Optional: override specific fields for paper summarisation only.
 # [llm-summary]
 # mode = "api"
-# provider = "anthropic"
+# provider = "claude"
 # model = "claude-opus-4-7"
