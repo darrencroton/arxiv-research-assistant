@@ -1,5 +1,8 @@
 import logging
+import os
 from pathlib import Path
+import sys
+import types
 
 import pytest
 
@@ -22,6 +25,7 @@ from re_ass.paper_summariser.service import (
     insert_section,
     normalise_extracted_text,
     normalise_tags_section,
+    read_input_file,
     read_project_knowledge,
     validate_glossary_section,
     validate_tags_section,
@@ -200,6 +204,86 @@ def test_summarise_source_uses_direct_pdf_when_provider_supports_it(tmp_path: Pa
     assert "---BEGIN PAPER---" not in str(provider.calls[0]["user_prompt"])
     assert provider.calls[1]["content"] == ""
     assert provider.calls[1]["is_pdf"] is False
+
+
+def test_marker_pdf_extraction_disables_progress_output(tmp_path: Path, monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeConfigParser:
+        def __init__(self, config: dict[str, object]) -> None:
+            captured["marker_config"] = config
+
+        def generate_config_dict(self) -> dict[str, object]:
+            return {"generated": True}
+
+        def get_converter_cls(self):
+            return FakeConverter
+
+        def get_processors(self) -> list[str]:
+            return []
+
+        def get_renderer(self) -> str:
+            return "fake-renderer"
+
+        def get_llm_service(self) -> None:
+            return None
+
+    class FakeConverter:
+        def __init__(self, **kwargs) -> None:
+            captured["converter_kwargs"] = kwargs
+
+        def __call__(self, path: str) -> object:
+            captured["converted_path"] = path
+            return object()
+
+    marker_module = types.ModuleType("marker")
+    marker_config_module = types.ModuleType("marker.config")
+    marker_parser_module = types.ModuleType("marker.config.parser")
+    marker_parser_module.ConfigParser = FakeConfigParser
+    marker_output_module = types.ModuleType("marker.output")
+    marker_output_module.text_from_rendered = lambda _rendered: ("Extracted marker text.", {}, {})
+
+    monkeypatch.setitem(sys.modules, "marker", marker_module)
+    monkeypatch.setitem(sys.modules, "marker.config", marker_config_module)
+    monkeypatch.setitem(sys.modules, "marker.config.parser", marker_parser_module)
+    monkeypatch.setitem(sys.modules, "marker.output", marker_output_module)
+    monkeypatch.setattr(paper_service, "_get_marker_models", lambda: {"model": object()})
+
+    provider = RecordingProvider({"response": _main_summary()})
+    source_path = tmp_path / "1234.5678.pdf"
+    source_path.write_bytes(b"%PDF-1.4")
+
+    text, error = read_input_file(source_path, provider, make_app_config(tmp_path).llm)
+
+    assert error is None
+    assert text == "Extracted marker text."
+    assert captured["converted_path"] == str(source_path)
+    assert captured["marker_config"] == {
+        "output_format": "markdown",
+        "disable_image_extraction": True,
+        "disable_tqdm": True,
+        "use_llm": False,
+    }
+
+
+def test_marker_model_cache_disables_surya_progress(monkeypatch) -> None:
+    class FakeModel:
+        disable_tqdm = False
+
+    marker_models_module = types.ModuleType("marker.models")
+    marker_models_module.create_model_dict = lambda: {
+        "progress_model": FakeModel(),
+        "plain_model": object(),
+    }
+
+    monkeypatch.setitem(sys.modules, "marker.models", marker_models_module)
+    monkeypatch.setattr(paper_service, "_marker_models", None)
+
+    models = paper_service._get_marker_models()
+
+    assert models["progress_model"].disable_tqdm is True
+    assert os.environ["TQDM_DISABLE"] == "1"
+    assert os.environ["DISABLE_TQDM"] == "1"
 
 
 def test_normalise_extracted_text_removes_pathological_marker_lines() -> None:

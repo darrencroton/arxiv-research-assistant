@@ -30,6 +30,7 @@ from .providers.base import Provider
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 # Suppress tqdm progress bars; re-ass runs unattended and the noise pollutes stderr logs.
 os.environ.setdefault("TQDM_DISABLE", "1")
+os.environ.setdefault("DISABLE_TQDM", "1")
 load_dotenv()
 
 LOGGER = logging.getLogger(__name__)
@@ -617,6 +618,9 @@ def _get_marker_models():
 
         LOGGER.info("Loading marker-pdf models (one-time initialisation)...")
         _marker_models = create_model_dict()
+        for model in _marker_models.values():
+            if hasattr(model, "disable_tqdm"):
+                model.disable_tqdm = True
         LOGGER.info("marker-pdf models loaded.")
     return _marker_models
 
@@ -645,6 +649,7 @@ def read_input_file(
             marker_config = {
                 "output_format": "markdown",
                 "disable_image_extraction": True,
+                "disable_tqdm": True,
                 "use_llm": False,
             }
             config_parser = ConfigParser(marker_config)
