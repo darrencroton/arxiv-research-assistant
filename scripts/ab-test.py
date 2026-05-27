@@ -149,9 +149,10 @@ STEP-BY-STEP
 
 4. cleanup --name <variant>
 
-    Archives the variant settings file to archive/ab-test/ (NEVER deletes),
-    uninstalls the launchd job if present, and prints (does not run) the mv
-    commands you can use to also archive the *-<name>/ directories.
+    Archives the variant settings file and launchd artifacts to
+    archive/ab-test/ (NEVER deletes), uninstalls the launchd job if present,
+    and prints (does not run) the mv commands you can use to also archive the
+    *-<name>/ runtime directories.
 
     --remove-script prints the one-liner to also archive this script and
     revert .gitignore. Git-touching is left to you.
@@ -1642,6 +1643,7 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
     name = _validate_variant(args.name)
 
     settings_path = _variant_settings_path(name)
+    ts = dt.datetime.now().strftime("%Y%m%dT%H%M%S")
 
     # Resolve the variant's runtime root directories *before* the settings file
     # is renamed/archived below — once renamed it can no longer be read at its
@@ -1657,7 +1659,6 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
             )
             return 1
         ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
-        ts = dt.datetime.now().strftime("%Y%m%dT%H%M%S")
         archived_to = ARCHIVE_DIR / f"settings-{name}-{ts}.toml"
         settings_path.rename(archived_to)
         print(f"Archived {settings_path.relative_to(REPO_ROOT)} -> {archived_to.relative_to(REPO_ROOT)}")
@@ -1672,13 +1673,14 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         plist_archive_dir = ARCHIVE_DIR / "launchd"
         plist_archive_dir.mkdir(parents=True, exist_ok=True)
-        ts = dt.datetime.now().strftime("%Y%m%dT%H%M%S")
         archived_plist = plist_archive_dir / f"{label}-{ts}.plist"
         shutil.move(str(installed), str(archived_plist))
         print(f"Uninstalled launchd job: {label}")
         print(f"Archived plist:          {archived_plist.relative_to(REPO_ROOT)}")
     else:
         print(f"(no launchd job to uninstall: {label})")
+
+    _archive_repo_launchd_artifacts(name, ts)
 
     # Print archive hints for runtime directories.  Directories inside the
     # repo get a ready-to-run `mv` command; directories outside the repo
@@ -1711,6 +1713,33 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
         print(f"  git mv scripts/ab-test.py archive/ab-test/ab-test.py")
         print(f"  git checkout -- .gitignore  # only if the four *-*/ globs were the only change")
     return 0
+
+
+def _archive_repo_launchd_artifacts(name: str, ts: str) -> None:
+    """Archive repo-local rendered launchd files and launchd stream logs."""
+    label = f"com.user.re-ass.{name}"
+    rendered_dir = REPO_ROOT / "logs" / "launchd"
+    archive_dir = ARCHIVE_DIR / "launchd"
+    artifacts = (
+        (rendered_dir / f"{label}.plist", archive_dir / f"{label}-rendered-{ts}.plist"),
+        (rendered_dir / f"{label}.stdout.log", archive_dir / f"{label}-stdout-{ts}.log"),
+        (rendered_dir / f"{label}.stderr.log", archive_dir / f"{label}-stderr-{ts}.log"),
+    )
+
+    archived_any = False
+    for source, destination in artifacts:
+        if not source.exists():
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(source), str(destination))
+        print(
+            "Archived repo-local launchd artifact: "
+            f"{source.relative_to(REPO_ROOT)} -> {destination.relative_to(REPO_ROOT)}"
+        )
+        archived_any = True
+
+    if not archived_any:
+        print(f"(no repo-local launchd artifacts to archive for {label})")
 
 
 # ---------------------------------------------------------------------------

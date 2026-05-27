@@ -150,17 +150,25 @@ def test_setup_refuses_symlinked_variant_config(tmp_path: Path, monkeypatch) -> 
     assert variant.is_symlink()
 
 
-def test_cleanup_archives_only_variant_settings(tmp_path: Path, monkeypatch) -> None:
+def test_cleanup_archives_variant_settings_and_repo_launchd_artifacts(tmp_path: Path, monkeypatch) -> None:
     ab_test = load_ab_test_module()
     user_prefs = tmp_path / "user_preferences"
     archive_dir = tmp_path / "archive" / "ab-test"
+    rendered_dir = tmp_path / "logs" / "launchd"
     launch_agents = tmp_path / "LaunchAgents"
     user_prefs.mkdir()
+    rendered_dir.mkdir(parents=True)
     launch_agents.mkdir()
     benchmark_settings = user_prefs / "settings.toml"
     variant_settings = user_prefs / "settings-local.toml"
     benchmark_settings.write_text("benchmark = true\n", encoding="utf-8")
     variant_settings.write_text("variant = true\n", encoding="utf-8")
+    rendered_plist = rendered_dir / "com.user.re-ass.local.plist"
+    rendered_stdout = rendered_dir / "com.user.re-ass.local.stdout.log"
+    rendered_stderr = rendered_dir / "com.user.re-ass.local.stderr.log"
+    rendered_plist.write_text("rendered plist\n", encoding="utf-8")
+    rendered_stdout.write_text("stdout\n", encoding="utf-8")
+    rendered_stderr.write_text("stderr\n", encoding="utf-8")
     monkeypatch.setattr(ab_test, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(ab_test, "USER_PREFS", user_prefs)
     monkeypatch.setattr(ab_test, "BENCHMARK_SETTINGS", benchmark_settings)
@@ -176,6 +184,20 @@ def test_cleanup_archives_only_variant_settings(tmp_path: Path, monkeypatch) -> 
     archived = sorted(archive_dir.glob("settings-local-*.toml"))
     assert len(archived) == 1
     assert archived[0].read_text(encoding="utf-8") == "variant = true\n"
+    assert not rendered_plist.exists()
+    assert not rendered_stdout.exists()
+    assert not rendered_stderr.exists()
+
+    launchd_archive = archive_dir / "launchd"
+    archived_rendered_plist = sorted(launchd_archive.glob("com.user.re-ass.local-rendered-*.plist"))
+    archived_stdout = sorted(launchd_archive.glob("com.user.re-ass.local-stdout-*.log"))
+    archived_stderr = sorted(launchd_archive.glob("com.user.re-ass.local-stderr-*.log"))
+    assert len(archived_rendered_plist) == 1
+    assert len(archived_stdout) == 1
+    assert len(archived_stderr) == 1
+    assert archived_rendered_plist[0].read_text(encoding="utf-8") == "rendered plist\n"
+    assert archived_stdout[0].read_text(encoding="utf-8") == "stdout\n"
+    assert archived_stderr[0].read_text(encoding="utf-8") == "stderr\n"
 
 
 def test_schedule_creates_log_dir_before_bootstrap(tmp_path: Path, monkeypatch) -> None:
