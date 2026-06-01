@@ -46,28 +46,3 @@ def test_canonical_filename_prevents_collisions_for_same_title() -> None:
     assert first.filename_stem != second.filename_stem
 
 
-def test_derive_identity_handles_last_comma_first_author_format() -> None:
-    # citation_author meta tags (used in the 429 fallback path) are "Last, First" format
-    paper = make_paper(
-        arxiv_id="2605.00763",
-        title="Life After the Quasar",
-        authors=("Meyer, R. A.", "Oesch, P. A.", "Witten, C."),
-    )
-
-    identity = derive_identity(paper)
-
-    assert identity.authors_short == "Meyer et al"
-    assert identity.filename_stem.startswith("Meyer et al - ")
-
-
-def test_derive_identity_falls_back_to_unknown_for_degenerate_comma_name() -> None:
-    paper = make_paper(
-        arxiv_id="2603.20012",
-        title="Some Paper",
-        authors=(", R. A.", "Oesch, P. A."),
-    )
-
-    identity = derive_identity(paper)
-
-    assert identity.authors_short == "Unknown et al"
-    assert identity.filename_stem.startswith("Unknown et al - ")

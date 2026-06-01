@@ -71,6 +71,15 @@ def _parse_published_datetime(citation_date: str | None, dateline_text: str) -> 
     return datetime.strptime(match.group("label"), "%d %b %Y").replace(tzinfo=timezone.utc)
 
 
+def _normalize_author_name(name: str) -> str:
+    """Convert 'Last, First [Middle]' from citation_author meta tags to 'First [Middle] Last'."""
+    if "," not in name:
+        return name
+    last, _, rest = name.partition(",")
+    first_parts = rest.strip()
+    return f"{first_parts} {last.strip()}" if first_parts else last.strip()
+
+
 def _extract_category_codes(value: str) -> tuple[str, ...]:
     codes: list[str] = []
     seen_codes: set[str] = set()
@@ -166,7 +175,11 @@ class _AbstractPageParser(HTMLParser):
         if not title:
             raise ValueError(f"Abstract page for {source_id} is missing a title.")
 
-        authors = tuple(_clean_text(author) for author in self.citation_authors if _clean_text(author))
+        authors = tuple(
+            _normalize_author_name(_clean_text(author))
+            for author in self.citation_authors
+            if _clean_text(author)
+        )
         if not authors:
             raise ValueError(f"Abstract page for {source_id} is missing authors.")
 

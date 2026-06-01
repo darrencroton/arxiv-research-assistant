@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import arxiv
 
-from re_ass.arxiv_fetcher import ArxivFetcher
+from re_ass.arxiv_fetcher import ArxivFetcher, _normalize_author_name
 from re_ass.models import PreferenceConfig
 
 
@@ -270,6 +270,53 @@ def test_collect_candidates_falls_back_to_abstract_pages_on_export_api_429() -> 
     assert papers[1].primary_category == "cs.CL"
     assert papers[2].categories == ("cs.AI", "cs.CL")
     assert client.searches[0].id_list == ["2603.10021", "2603.10022", "2603.10023"]
+
+
+def test_normalize_author_name_converts_last_comma_first_to_first_last() -> None:
+    assert _normalize_author_name("Meyer, R. A.") == "R. A. Meyer"
+    assert _normalize_author_name("Leethochawalit, Natalie") == "Natalie Leethochawalit"
+    assert _normalize_author_name("Yu, Si-Yue") == "Si-Yue Yu"
+    assert _normalize_author_name("Chandro-Gómez, Ángel") == "Ángel Chandro-Gómez"
+
+
+def test_normalize_author_name_leaves_first_last_format_unchanged() -> None:
+    assert _normalize_author_name("Natalie Leethochawalit") == "Natalie Leethochawalit"
+    assert _normalize_author_name("Euclid Collaboration") == "Euclid Collaboration"
+    assert _normalize_author_name("F. Valentino") == "F. Valentino"
+
+
+def test_collect_candidates_fallback_normalizes_author_names() -> None:
+    announcement_day = date(2026, 3, 24)
+    listing_html_by_category = {
+        "cs.AI": _listing_html(heading="Tue, 24 Mar 2026 (showing 1 of 1 entries )", ids=["2603.10060"]),
+    }
+    abstract_html_by_id = {
+        "2603.10060": _abstract_html(
+            source_id="2603.10060",
+            title="Author Name Test",
+            authors=("Meyer, R. A.", "Oesch, P. A.", "Yu, Si-Yue"),
+            abstract="Testing author normalization.",
+        ),
+    }
+
+    class FailingClient:
+        def results(self, search: object):
+            raise arxiv.HTTPError("https://export.arxiv.org/api/query", 0, 429)
+
+    fetcher = ArxivFetcher(
+        page_size=10,
+        client=FailingClient(),
+        listing_fetcher=lambda category: listing_html_by_category[category],
+        abstract_fetcher=lambda source_id: abstract_html_by_id[source_id],
+    )
+
+    papers = fetcher.collect_candidates(
+        PreferenceConfig(priorities=("Agents",), categories=("cs.AI",)),
+        announcement_date=announcement_day,
+    )
+
+    assert len(papers) == 1
+    assert papers[0].authors == ("R. A. Meyer", "P. A. Oesch", "Si-Yue Yu")
 
 
 def test_collect_candidates_reraises_non_429_export_errors() -> None:
