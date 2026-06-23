@@ -6,8 +6,10 @@ from datetime import date, datetime, timezone
 from html import unescape
 from html.parser import HTMLParser
 import logging
+import time
 from typing import Any
 import re
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import arxiv
@@ -274,8 +276,20 @@ class ArxivFetcher:
     def _fetch_listing_html(self, category: str) -> str:
         url = f"https://arxiv.org/list/{category}/pastweek?show={_RECENT_PAGE_SIZE}"
         request = Request(url, headers={"User-Agent": "re-ass/1.0"})
-        with urlopen(request, timeout=60) as response:
-            return response.read().decode("utf-8")
+        delays = [10, 30, 90]
+        for attempt, delay in enumerate(delays + [None], start=1):
+            try:
+                with urlopen(request, timeout=60) as response:
+                    return response.read().decode("utf-8")
+            except HTTPError as exc:
+                if exc.code != 429 or delay is None:
+                    raise
+                LOGGER.warning(
+                    "arXiv listing fetch returned 429 for %s (attempt %d/%d); retrying in %ds",
+                    category, attempt, len(delays) + 1, delay,
+                )
+                time.sleep(delay)
+        raise RuntimeError("unreachable")
 
     def _fetch_abstract_html(self, source_id: str) -> str:
         url = f"https://arxiv.org/abs/{source_id}"
