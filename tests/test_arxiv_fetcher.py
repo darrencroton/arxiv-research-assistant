@@ -319,10 +319,43 @@ def test_collect_candidates_fallback_normalizes_author_names() -> None:
     assert papers[0].authors == ("R. A. Meyer", "P. A. Oesch", "Si-Yue Yu")
 
 
-def test_collect_candidates_reraises_non_429_export_errors() -> None:
+def test_collect_candidates_falls_back_to_abstract_pages_on_export_api_503() -> None:
+    announcement_day = date(2026, 3, 24)
+    listing_html_by_category = {
+        "cs.AI": _listing_html(heading="Tue, 24 Mar 2026 (showing 1 of 1 entries )", ids=["2603.10050"]),
+    }
+    abstract_html_by_id = {
+        "2603.10050": _abstract_html(
+            source_id="2603.10050",
+            title="Service Unavailable Fallback",
+            authors=("Test Author",),
+            abstract="Fallback abstract for a transient 503.",
+        ),
+    }
+
+    class FailingClient:
+        def results(self, search: object):
+            raise arxiv.HTTPError("https://export.arxiv.org/api/query?id_list=2603.10050", 0, 503)
+
     fetcher = ArxivFetcher(
         page_size=10,
-        client=SimpleNamespace(results=lambda _search: (_ for _ in ()).throw(arxiv.HTTPError("https://export.arxiv.org/api/query", 0, 500))),
+        client=FailingClient(),
+        listing_fetcher=lambda category: listing_html_by_category[category],
+        abstract_fetcher=lambda source_id: abstract_html_by_id[source_id],
+    )
+
+    papers = fetcher.collect_candidates(
+        PreferenceConfig(priorities=("Agents",), categories=("cs.AI",)),
+        announcement_date=announcement_day,
+    )
+
+    assert [paper.title for paper in papers] == ["Service Unavailable Fallback"]
+
+
+def test_collect_candidates_reraises_non_429_client_export_errors() -> None:
+    fetcher = ArxivFetcher(
+        page_size=10,
+        client=SimpleNamespace(results=lambda _search: (_ for _ in ()).throw(arxiv.HTTPError("https://export.arxiv.org/api/query", 0, 404))),
         listing_fetcher=lambda _category: _listing_html(
             heading="Tue, 24 Mar 2026 (showing 1 of 1 entries )",
             ids=["2603.10050"],
@@ -336,6 +369,6 @@ def test_collect_candidates_reraises_non_429_export_errors() -> None:
             announcement_date=date(2026, 3, 24),
         )
     except arxiv.HTTPError as error:
-        assert error.status == 500
+        assert error.status == 404
     else:
-        raise AssertionError("Expected non-429 export errors to propagate.")
+        raise AssertionError("Expected non-429, non-5xx export errors to propagate.")

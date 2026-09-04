@@ -382,10 +382,11 @@ class ArxivFetcher:
         try:
             results_by_id = self._collect_candidates_from_api(pending_source_ids)
         except arxiv.HTTPError as error:
-            if error.status != 429:
+            if error.status != 429 and error.status < 500:
                 raise
             LOGGER.warning(
-                "arXiv export API returned HTTP 429 for %s candidate(s); falling back to abstract-page parsing.",
+                "arXiv export API returned HTTP %s for %s candidate(s); falling back to abstract-page parsing.",
+                error.status,
                 len(pending_source_ids),
             )
             results_by_id = self._collect_candidates_from_abstract_pages(pending_source_ids)
