@@ -22,6 +22,7 @@ LOGGER = logging.getLogger(__name__)
 _ANNOUNCEMENT_HEADING_RE = re.compile(r"^(?P<label>[A-Za-z]{3}, \d{1,2} [A-Za-z]{3} \d{4})")
 _CATEGORY_CODE_RE = re.compile(r"\((?P<code>[A-Za-z0-9.-]+)\)")
 _RECENT_PAGE_SIZE = 2000
+_ARXIV_CRAWL_DELAY_SECONDS = 15
 _SUBMITTED_DATE_RE = re.compile(r"\[Submitted on (?P<label>\d{1,2} [A-Za-z]{3} \d{4})")
 _WHITESPACE_RE = re.compile(r"\s+")
 
@@ -272,30 +273,50 @@ class ArxivFetcher:
         self._listing_fetcher = listing_fetcher or self._fetch_listing_html
         self._abstract_fetcher = abstract_fetcher or self._fetch_abstract_html
         self._listing_cache: dict[str, dict[date, list[str]]] = {}
+        self._last_arxiv_request_at: float | None = None
+
+    def _wait_for_crawl_delay(self) -> None:
+        # arxiv.org/robots.txt declares "Crawl-delay: 15" for /list and /abs;
+        # requests issued faster than that appear to get flagged and 406'd.
+        if self._last_arxiv_request_at is None:
+            return
+        remaining = _ARXIV_CRAWL_DELAY_SECONDS - (time.monotonic() - self._last_arxiv_request_at)
+        if remaining > 0:
+            time.sleep(remaining)
 
     def _fetch_listing_html(self, category: str) -> str:
         url = f"https://arxiv.org/list/{category}/pastweek?show={_RECENT_PAGE_SIZE}"
         request = Request(url, headers={"User-Agent": "re-ass/1.0"})
-        delays = [10, 30, 90]
+        delays = [15, 30, 90]
         for attempt, delay in enumerate(delays + [None], start=1):
+            self._wait_for_crawl_delay()
             try:
                 with urlopen(request, timeout=60) as response:
-                    return response.read().decode("utf-8")
+                    html = response.read().decode("utf-8")
             except HTTPError as exc:
-                if exc.code != 429 or delay is None:
+                self._last_arxiv_request_at = time.monotonic()
+                is_transient = exc.code == 429 or exc.code == 406 or exc.code >= 500
+                if not is_transient or delay is None:
                     raise
                 LOGGER.warning(
-                    "arXiv listing fetch returned 429 for %s (attempt %d/%d); retrying in %ds",
-                    category, attempt, len(delays) + 1, delay,
+                    "arXiv listing fetch returned HTTP %s for %s (attempt %d/%d); retrying in %ds",
+                    exc.code, category, attempt, len(delays) + 1, delay,
                 )
                 time.sleep(delay)
+            else:
+                self._last_arxiv_request_at = time.monotonic()
+                return html
         raise RuntimeError("unreachable")
 
     def _fetch_abstract_html(self, source_id: str) -> str:
         url = f"https://arxiv.org/abs/{source_id}"
         request = Request(url, headers={"User-Agent": "re-ass/1.0"})
-        with urlopen(request, timeout=60) as response:
-            return response.read().decode("utf-8")
+        self._wait_for_crawl_delay()
+        try:
+            with urlopen(request, timeout=60) as response:
+                return response.read().decode("utf-8")
+        finally:
+            self._last_arxiv_request_at = time.monotonic()
 
     def _category_listing(self, category: str) -> dict[date, list[str]]:
         cached = self._listing_cache.get(category)
