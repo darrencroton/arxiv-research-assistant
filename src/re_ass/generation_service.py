@@ -11,7 +11,7 @@ from urllib.error import HTTPError
 
 from re_ass.arxiv_rate_limit import ArxivRateLimiter, RETRY_DELAYS_SECONDS, get_shared_limiter, is_transient_http_status
 from re_ass.models import ArxivPaper
-from re_ass.paper_summariser import PaperSummariser, PaperSummariserError
+from re_ass.paper_summariser import PaperSummariser, PaperSummariserError, PdfDownloadTruncatedError
 from re_ass.paper_summariser.providers import create_provider
 from re_ass.paper_summariser.providers.base import Provider
 from re_ass.paper_summariser.service import download_arxiv_pdf
@@ -105,7 +105,10 @@ class GenerationService:
 
         arxiv.org/pdf sits under the same robots.txt Crawl-delay: 15 as the
         listing/abstract-page fetches in ArxivFetcher, so downloads share that
-        process-wide pacing and retry on the same transient HTTP codes.
+        process-wide pacing and retry on the same transient HTTP codes. A
+        short/interrupted read (fewer bytes than Content-Length promised) is
+        also treated as transient -- it produces a file that looks downloaded
+        but fails much later with a cryptic PDF-parsing error otherwise.
         """
         delays = list(RETRY_DELAYS_SECONDS)
         for attempt, delay in enumerate(delays + [None], start=1):
@@ -115,11 +118,14 @@ class GenerationService:
             except PaperSummariserError as error:
                 self._arxiv_rate_limiter.mark_request_completed()
                 status_code = error.__cause__.code if isinstance(error.__cause__, HTTPError) else None
-                if status_code is None or not is_transient_http_status(status_code) or delay is None:
+                is_transient = isinstance(error, PdfDownloadTruncatedError) or (
+                    status_code is not None and is_transient_http_status(status_code)
+                )
+                if not is_transient or delay is None:
                     raise GenerationError(str(error)) from error
                 LOGGER.warning(
-                    "PDF download returned HTTP %s for %s (attempt %d/%d); retrying in %ds",
-                    status_code, paper.arxiv_url, attempt, len(delays) + 1, delay,
+                    "PDF download attempt failed for %s (attempt %d/%d): %s; retrying in %ds",
+                    paper.arxiv_url, attempt, len(delays) + 1, error, delay,
                 )
                 time.sleep(delay)
             else:

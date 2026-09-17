@@ -6,6 +6,7 @@ from collections.abc import Callable
 import concurrent.futures
 from dataclasses import dataclass
 from datetime import timezone
+from http.client import IncompleteRead
 import logging
 import os
 from pathlib import Path
@@ -122,6 +123,10 @@ class PaperSummariserError(RuntimeError):
     """Raised when the adapted paper summariser cannot produce a note."""
 
 
+class PdfDownloadTruncatedError(PaperSummariserError):
+    """Raised when a PDF download returns fewer bytes than Content-Length promised."""
+
+
 @dataclass(frozen=True, slots=True)
 class SourceMetadata:
     """Structured source metadata that can guide or repair summary top matter."""
@@ -188,11 +193,34 @@ def download_arxiv_pdf(paper: ArxivPaper, destination_dir: Path, config: LlmConf
     destination = destination_dir / f"{identifier}.pdf"
     request = Request(pdf_url, headers={"User-Agent": USER_AGENT})
 
+    read_cap = config.max_pdf_size_mb * 1024 * 1024 + 1
     try:
         with urlopen(request, timeout=config.download_timeout_seconds) as response:
-            payload = response.read(config.max_pdf_size_mb * 1024 * 1024 + 1)
+            # HTTPResponse.read(n) is not guaranteed to return n bytes in one
+            # call -- it can hand back the body in parts depending on how the
+            # server/CDN delivers it -- so loop until the stream is drained
+            # (an empty read) or we've clearly exceeded the size cap.
+            chunks: list[bytes] = []
+            total_read = 0
+            while total_read <= read_cap:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total_read += len(chunk)
+            payload = b"".join(chunks)
+            content_length_header = response.getheader("Content-Length")
     except HTTPError as error:
         raise PaperSummariserError(f"Downloading {pdf_url} returned HTTP {error.code}.") from error
+    except IncompleteRead as error:
+        # A different internal http.client code path for the same condition
+        # the Content-Length check below normally catches: the connection
+        # closed before delivering everything it promised.
+        got = len(error.partial)
+        expected = got + (error.expected or 0)
+        raise PdfDownloadTruncatedError(
+            f"Downloading {pdf_url} was truncated: got {got} of {expected} expected bytes."
+        ) from error
     except URLError as error:
         raise PaperSummariserError(f"Downloading {pdf_url} failed: {error.reason}.") from error
     except OSError as error:
@@ -204,6 +232,14 @@ def download_arxiv_pdf(paper: ArxivPaper, destination_dir: Path, config: LlmConf
         raise PaperSummariserError(
             f"Downloaded PDF exceeds {config.max_pdf_size_mb}MB limit."
         )
+    if content_length_header is not None:
+        expected_length = int(content_length_header)
+        # `read_cap` bytes is the most we ever ask for, so a deliberately
+        # capped read of an over-limit file (handled above) isn't truncation.
+        if len(payload) < min(expected_length, read_cap):
+            raise PdfDownloadTruncatedError(
+                f"Downloading {pdf_url} was truncated: got {len(payload)} of {expected_length} expected bytes."
+            )
 
     destination.write_bytes(payload)
     LOGGER.info("Downloaded %s to %s.", pdf_url, destination)

@@ -12,9 +12,11 @@ from re_ass.paper_summariser.service import (
     GLOSSARY_MAX_TERMS,
     PaperSummariser,
     PaperSummariserError,
+    PdfDownloadTruncatedError,
     ProjectKnowledge,
     SourceMetadata,
     build_fallback_tags,
+    download_arxiv_pdf,
     generate_glossary,
     generate_tags,
     create_system_prompt,
@@ -751,3 +753,86 @@ def test_insert_section_places_generated_content_before_references() -> None:
 
     assert result.index("## Tags") < result.index("## References")
     assert "## Results" in result
+
+
+class _FakePdfResponse:
+    """Mimics HTTPResponse.read(n) possibly returning the body in parts,
+    followed by an empty read at EOF -- the exact behaviour the drain loop
+    in download_arxiv_pdf has to handle correctly."""
+
+    def __init__(self, chunks: list[bytes], content_length: int) -> None:
+        self._chunks = list(chunks)
+        self._content_length = content_length
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return None
+
+    def read(self, _amt: int) -> bytes:
+        return self._chunks.pop(0) if self._chunks else b""
+
+    def getheader(self, name: str) -> str | None:
+        return str(self._content_length) if name == "Content-Length" else None
+
+
+def test_download_arxiv_pdf_succeeds_when_payload_matches_content_length(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = b"%PDF-1.7\n...full content...\n%%EOF"
+    monkeypatch.setattr(
+        paper_service, "urlopen", lambda *_args, **_kwargs: _FakePdfResponse([payload], len(payload))
+    )
+
+    path = download_arxiv_pdf(make_paper(arxiv_id="2609.12060"), tmp_path, make_app_config(tmp_path).llm)
+
+    assert path.read_bytes() == payload
+
+
+def test_download_arxiv_pdf_drains_a_response_delivered_in_multiple_parts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # HTTPResponse.read(n) is not guaranteed to return n bytes in one call;
+    # a real response can arrive in several reads even though none of them
+    # is empty until the true end of the stream.
+    parts = [b"%PDF-1.7\n", b"...middle content...\n", b"%%EOF"]
+    full_payload = b"".join(parts)
+    monkeypatch.setattr(
+        paper_service, "urlopen", lambda *_args, **_kwargs: _FakePdfResponse(parts, len(full_payload))
+    )
+
+    path = download_arxiv_pdf(make_paper(arxiv_id="2609.12060"), tmp_path, make_app_config(tmp_path).llm)
+
+    assert path.read_bytes() == full_payload
+
+
+def test_download_arxiv_pdf_raises_when_response_is_shorter_than_content_length(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    truncated_payload = b"%PDF-1.7\n...only part of the file..."
+    monkeypatch.setattr(
+        paper_service,
+        "urlopen",
+        lambda *_args, **_kwargs: _FakePdfResponse([truncated_payload], len(truncated_payload) + 1_000_000),
+    )
+
+    with pytest.raises(PdfDownloadTruncatedError, match="truncated"):
+        download_arxiv_pdf(make_paper(arxiv_id="2609.12060"), tmp_path, make_app_config(tmp_path).llm)
+
+
+def test_download_arxiv_pdf_converts_incomplete_read_to_truncated_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from http.client import IncompleteRead
+
+    class _RaisingResponse(_FakePdfResponse):
+        def read(self, _amt: int) -> bytes:
+            raise IncompleteRead(b"partial-bytes", 100)
+
+    monkeypatch.setattr(
+        paper_service, "urlopen", lambda *_args, **_kwargs: _RaisingResponse([], 113)
+    )
+
+    with pytest.raises(PdfDownloadTruncatedError, match="got 13 of 113 expected bytes"):
+        download_arxiv_pdf(make_paper(arxiv_id="2609.12060"), tmp_path, make_app_config(tmp_path).llm)

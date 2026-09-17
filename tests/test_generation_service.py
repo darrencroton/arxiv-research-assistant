@@ -7,7 +7,12 @@ import pytest
 from re_ass.arxiv_rate_limit import ArxivRateLimiter, get_shared_limiter
 from re_ass.generation_service import GenerationError, GenerationService
 import re_ass.generation_service as generation_service_module
-from re_ass.paper_summariser.service import GeneratedPaperSummary, PaperSummariserError, SourceMetadata
+from re_ass.paper_summariser.service import (
+    GeneratedPaperSummary,
+    PaperSummariserError,
+    PdfDownloadTruncatedError,
+    SourceMetadata,
+)
 from tests.support import make_app_config, make_paper
 
 
@@ -175,6 +180,45 @@ def test_stage_pdf_download_reraises_non_transient_http_errors(tmp_path: Path, m
 
     with pytest.raises(GenerationError, match="HTTP 404"):
         service.stage_pdf_download(make_paper(), tmp_path)
+
+
+def test_stage_pdf_download_retries_a_truncated_download_then_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sleeps: list[float] = []
+    fake_now = [0.0]
+
+    def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        fake_now[0] += seconds
+
+    monkeypatch.setattr(generation_service_module.time, "sleep", fake_sleep)
+    monkeypatch.setattr(generation_service_module.time, "monotonic", lambda: fake_now[0])
+
+    destination = tmp_path / "downloaded.pdf"
+    destination.write_bytes(b"%PDF-1.4")
+    attempts: list[int] = []
+
+    def fake_download(_paper, _destination_dir, _config):
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise PdfDownloadTruncatedError("Downloading ... was truncated: got 5 of 10 expected bytes.")
+        return destination
+
+    monkeypatch.setattr(generation_service_module, "download_arxiv_pdf", fake_download)
+
+    service = GenerationService(
+        config=make_app_config(tmp_path).llm,
+        provider=object(),
+        paper_summariser=StubPaperSummariser(),
+        arxiv_rate_limiter=ArxivRateLimiter(),
+    )
+
+    result = service.stage_pdf_download(make_paper(), tmp_path)
+
+    assert result == destination
+    assert len(attempts) == 2
+    assert sleeps == [15]
 
 
 def test_stage_pdf_download_defaults_to_the_shared_arxiv_rate_limiter(tmp_path: Path) -> None:
