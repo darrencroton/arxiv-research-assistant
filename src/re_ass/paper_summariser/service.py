@@ -165,7 +165,10 @@ def build_pdf_url(paper_url: str) -> str:
     identifier = identifier.removesuffix(".pdf")
     if not identifier:
         raise PaperSummariserError(f"Could not determine an arXiv identifier from {paper_url}")
-    return f"https://arxiv.org/pdf/{identifier}.pdf"
+    # arXiv's canonical PDF URL is now extension-less (the .pdf-suffixed form
+    # 301-redirects here); requesting it directly avoids that extra hop, which
+    # is one place a flaky edge cache could return 406 instead of the redirect.
+    return f"https://arxiv.org/pdf/{identifier}"
 
 
 def extract_arxiv_identifier(paper_url: str) -> str | None:

@@ -132,7 +132,7 @@ def test_summarise_source_uses_extracted_text(tmp_path: Path) -> None:
     )
 
     assert "## Key Ideas" in result.raw_summary
-    assert result.pdf_url == "https://arxiv.org/pdf/1234.5678.pdf"
+    assert result.pdf_url == "https://arxiv.org/pdf/1234.5678"
     assert result.raw_summary.index("## Glossary") < result.raw_summary.index("## Tags")
     assert result.raw_summary.index("## Tags") < result.raw_summary.index("## References")
     assert provider.calls[0]["content"] == "arXiv: 1234.5678\nExtracted paper text."
