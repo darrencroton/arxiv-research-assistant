@@ -1,9 +1,12 @@
 from dataclasses import replace
 from pathlib import Path
+from urllib.error import HTTPError
 
 import pytest
 
+from re_ass.arxiv_rate_limit import ArxivRateLimiter, get_shared_limiter
 from re_ass.generation_service import GenerationError, GenerationService
+import re_ass.generation_service as generation_service_module
 from re_ass.paper_summariser.service import GeneratedPaperSummary, PaperSummariserError, SourceMetadata
 from tests.support import make_app_config, make_paper
 
@@ -110,6 +113,136 @@ def test_generation_service_raises_when_summariser_fails(tmp_path: Path) -> None
 
     with pytest.raises(GenerationError, match="Unable to create paper note"):
         service.build_paper_note_content(make_paper(title="Broken Paper"), tmp_path / "paper.pdf")
+
+
+def test_stage_pdf_download_retries_on_406_then_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sleeps: list[float] = []
+    fake_now = [0.0]
+
+    def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        fake_now[0] += seconds
+
+    monkeypatch.setattr(generation_service_module.time, "sleep", fake_sleep)
+    monkeypatch.setattr(generation_service_module.time, "monotonic", lambda: fake_now[0])
+
+    destination = tmp_path / "downloaded.pdf"
+    destination.write_bytes(b"%PDF-1.4")
+    attempts: list[int] = []
+
+    def fake_download(_paper, _destination_dir, _config):
+        attempts.append(1)
+        if len(attempts) == 1:
+            cause = HTTPError("https://arxiv.org/pdf/2603.15732v1.pdf", 406, "Not Acceptable", None, None)
+            raise PaperSummariserError("Downloading https://arxiv.org/pdf/2603.15732v1.pdf returned HTTP 406.") from cause
+        return destination
+
+    monkeypatch.setattr(generation_service_module, "download_arxiv_pdf", fake_download)
+
+    service = GenerationService(
+        config=make_app_config(tmp_path).llm,
+        provider=object(),
+        paper_summariser=StubPaperSummariser(),
+        arxiv_rate_limiter=ArxivRateLimiter(),
+    )
+
+    result = service.stage_pdf_download(make_paper(), tmp_path)
+
+    assert result == destination
+    assert len(attempts) == 2
+    assert sleeps == [15]
+
+
+def test_stage_pdf_download_reraises_non_transient_http_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        generation_service_module.time,
+        "sleep",
+        lambda _seconds: (_ for _ in ()).throw(AssertionError("Should not retry on 404")),
+    )
+
+    def fake_download(_paper, _destination_dir, _config):
+        cause = HTTPError("https://arxiv.org/pdf/2603.15732v1.pdf", 404, "Not Found", None, None)
+        raise PaperSummariserError("Downloading https://arxiv.org/pdf/2603.15732v1.pdf returned HTTP 404.") from cause
+
+    monkeypatch.setattr(generation_service_module, "download_arxiv_pdf", fake_download)
+
+    service = GenerationService(
+        config=make_app_config(tmp_path).llm,
+        provider=object(),
+        paper_summariser=StubPaperSummariser(),
+        arxiv_rate_limiter=ArxivRateLimiter(),
+    )
+
+    with pytest.raises(GenerationError, match="HTTP 404"):
+        service.stage_pdf_download(make_paper(), tmp_path)
+
+
+def test_stage_pdf_download_defaults_to_the_shared_arxiv_rate_limiter(tmp_path: Path) -> None:
+    service = GenerationService(
+        config=make_app_config(tmp_path).llm,
+        provider=object(),
+        paper_summariser=StubPaperSummariser(),
+    )
+
+    assert service._arxiv_rate_limiter is get_shared_limiter()
+
+
+def test_stage_pdf_download_waits_out_a_pending_crawl_delay_before_downloading(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sleeps: list[float] = []
+    fake_now = [0.0]
+
+    def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        fake_now[0] += seconds
+
+    monkeypatch.setattr(generation_service_module.time, "sleep", fake_sleep)
+    monkeypatch.setattr(generation_service_module.time, "monotonic", lambda: fake_now[0])
+
+    rate_limiter = ArxivRateLimiter()
+    rate_limiter.mark_request_completed()  # simulate a request made moments ago (e.g. by ArxivFetcher)
+
+    destination = tmp_path / "downloaded.pdf"
+    destination.write_bytes(b"%PDF-1.4")
+    monkeypatch.setattr(generation_service_module, "download_arxiv_pdf", lambda *_args: destination)
+
+    service = GenerationService(
+        config=make_app_config(tmp_path).llm,
+        provider=object(),
+        paper_summariser=StubPaperSummariser(),
+        arxiv_rate_limiter=rate_limiter,
+    )
+
+    result = service.stage_pdf_download(make_paper(), tmp_path)
+
+    assert result == destination
+    assert sleeps == [15]
+
+
+def test_stage_pdf_download_does_not_retry_failures_without_an_http_cause(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        generation_service_module.time,
+        "sleep",
+        lambda _seconds: (_ for _ in ()).throw(AssertionError("Should not retry a non-HTTP failure")),
+    )
+
+    def fake_download(_paper, _destination_dir, _config):
+        raise PaperSummariserError("Downloading https://arxiv.org/pdf/2603.15732v1.pdf failed: [Errno -2] Name or service not known.")
+
+    monkeypatch.setattr(generation_service_module, "download_arxiv_pdf", fake_download)
+
+    service = GenerationService(
+        config=make_app_config(tmp_path).llm,
+        provider=object(),
+        paper_summariser=StubPaperSummariser(),
+        arxiv_rate_limiter=ArxivRateLimiter(),
+    )
+
+    with pytest.raises(GenerationError, match="Name or service not known"):
+        service.stage_pdf_download(make_paper(), tmp_path)
 
 
 def test_generate_weekly_synthesis_uses_full_weekly_additions_and_word_limit(tmp_path: Path) -> None:

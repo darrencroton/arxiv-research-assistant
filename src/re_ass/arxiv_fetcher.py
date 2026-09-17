@@ -14,6 +14,13 @@ from urllib.request import Request, urlopen
 
 import arxiv
 
+from re_ass.arxiv_rate_limit import (
+    USER_AGENT,
+    ArxivRateLimiter,
+    RETRY_DELAYS_SECONDS,
+    get_shared_limiter,
+    is_transient_http_status,
+)
 from re_ass.models import ArxivPaper, PreferenceConfig
 from re_ass.paper_identity import derive_identity, extract_source_id
 
@@ -22,7 +29,6 @@ LOGGER = logging.getLogger(__name__)
 _ANNOUNCEMENT_HEADING_RE = re.compile(r"^(?P<label>[A-Za-z]{3}, \d{1,2} [A-Za-z]{3} \d{4})")
 _CATEGORY_CODE_RE = re.compile(r"\((?P<code>[A-Za-z0-9.-]+)\)")
 _RECENT_PAGE_SIZE = 2000
-_ARXIV_CRAWL_DELAY_SECONDS = 15
 _SUBMITTED_DATE_RE = re.compile(r"\[Submitted on (?P<label>\d{1,2} [A-Za-z]{3} \d{4})")
 _WHITESPACE_RE = re.compile(r"\s+")
 
@@ -267,36 +273,27 @@ class ArxivFetcher:
         client: arxiv.Client | None = None,
         listing_fetcher: Any | None = None,
         abstract_fetcher: Any | None = None,
+        rate_limiter: ArxivRateLimiter | None = None,
     ) -> None:
         self.page_size = max(1, min(page_size, 100))
         self.client = client or arxiv.Client(page_size=self.page_size, num_retries=3, delay_seconds=3)
         self._listing_fetcher = listing_fetcher or self._fetch_listing_html
         self._abstract_fetcher = abstract_fetcher or self._fetch_abstract_html
         self._listing_cache: dict[str, dict[date, list[str]]] = {}
-        self._last_arxiv_request_at: float | None = None
-
-    def _wait_for_crawl_delay(self) -> None:
-        # arxiv.org/robots.txt declares "Crawl-delay: 15" for /list and /abs;
-        # requests issued faster than that appear to get flagged and 406'd.
-        if self._last_arxiv_request_at is None:
-            return
-        remaining = _ARXIV_CRAWL_DELAY_SECONDS - (time.monotonic() - self._last_arxiv_request_at)
-        if remaining > 0:
-            time.sleep(remaining)
+        self._rate_limiter = rate_limiter or get_shared_limiter()
 
     def _fetch_listing_html(self, category: str) -> str:
         url = f"https://arxiv.org/list/{category}/pastweek?show={_RECENT_PAGE_SIZE}"
-        request = Request(url, headers={"User-Agent": "re-ass/1.0"})
-        delays = [15, 30, 90]
+        request = Request(url, headers={"User-Agent": USER_AGENT})
+        delays = list(RETRY_DELAYS_SECONDS)
         for attempt, delay in enumerate(delays + [None], start=1):
-            self._wait_for_crawl_delay()
+            self._rate_limiter.wait_for_crawl_delay()
             try:
                 with urlopen(request, timeout=60) as response:
                     html = response.read().decode("utf-8")
             except HTTPError as exc:
-                self._last_arxiv_request_at = time.monotonic()
-                is_transient = exc.code == 429 or exc.code == 406 or exc.code >= 500
-                if not is_transient or delay is None:
+                self._rate_limiter.mark_request_completed()
+                if not is_transient_http_status(exc.code) or delay is None:
                     raise
                 LOGGER.warning(
                     "arXiv listing fetch returned HTTP %s for %s (attempt %d/%d); retrying in %ds",
@@ -304,19 +301,19 @@ class ArxivFetcher:
                 )
                 time.sleep(delay)
             else:
-                self._last_arxiv_request_at = time.monotonic()
+                self._rate_limiter.mark_request_completed()
                 return html
         raise RuntimeError("unreachable")
 
     def _fetch_abstract_html(self, source_id: str) -> str:
         url = f"https://arxiv.org/abs/{source_id}"
-        request = Request(url, headers={"User-Agent": "re-ass/1.0"})
-        self._wait_for_crawl_delay()
+        request = Request(url, headers={"User-Agent": USER_AGENT})
+        self._rate_limiter.wait_for_crawl_delay()
         try:
             with urlopen(request, timeout=60) as response:
                 return response.read().decode("utf-8")
         finally:
-            self._last_arxiv_request_at = time.monotonic()
+            self._rate_limiter.mark_request_completed()
 
     def _category_listing(self, category: str) -> dict[date, list[str]]:
         cached = self._listing_cache.get(category)

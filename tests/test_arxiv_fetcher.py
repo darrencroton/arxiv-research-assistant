@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import arxiv
 
 from re_ass.arxiv_fetcher import ArxivFetcher, _normalize_author_name
+from re_ass.arxiv_rate_limit import ArxivRateLimiter, get_shared_limiter
 from re_ass.models import PreferenceConfig
 
 
@@ -374,6 +375,12 @@ def test_collect_candidates_reraises_non_429_client_export_errors() -> None:
         raise AssertionError("Expected non-429, non-5xx export errors to propagate.")
 
 
+def test_arxiv_fetcher_defaults_to_the_shared_rate_limiter() -> None:
+    fetcher = ArxivFetcher(page_size=10, client=SimpleNamespace(results=lambda _search: []))
+
+    assert fetcher._rate_limiter is get_shared_limiter()
+
+
 def test_fetch_listing_html_retries_on_406_then_succeeds(monkeypatch) -> None:
     from urllib.error import HTTPError
 
@@ -413,7 +420,7 @@ def test_fetch_listing_html_retries_on_406_then_succeeds(monkeypatch) -> None:
 
     monkeypatch.setattr(arxiv_fetcher_module, "urlopen", fake_urlopen)
 
-    fetcher = ArxivFetcher(page_size=10)
+    fetcher = ArxivFetcher(page_size=10, rate_limiter=ArxivRateLimiter())
     listing = fetcher._category_listing("cs.AI")
 
     assert listing == {date(2026, 3, 24): ["2603.10050"]}
@@ -436,7 +443,7 @@ def test_fetch_listing_html_reraises_non_transient_errors(monkeypatch) -> None:
 
     monkeypatch.setattr(arxiv_fetcher_module, "urlopen", fake_urlopen)
 
-    fetcher = ArxivFetcher(page_size=10)
+    fetcher = ArxivFetcher(page_size=10, rate_limiter=ArxivRateLimiter())
 
     try:
         fetcher._category_listing("cs.AI")
@@ -480,7 +487,7 @@ def test_available_announcement_dates_respects_crawl_delay_between_categories(mo
 
     monkeypatch.setattr(arxiv_fetcher_module, "urlopen", fake_urlopen)
 
-    fetcher = ArxivFetcher(page_size=10)
+    fetcher = ArxivFetcher(page_size=10, rate_limiter=ArxivRateLimiter())
     dates = fetcher.available_announcement_dates(("cs.AI", "cs.CL"))
 
     assert dates == (date(2026, 3, 24),)

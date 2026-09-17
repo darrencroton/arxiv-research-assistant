@@ -26,6 +26,7 @@
 - `output/`, `state/`, `logs/`: active runtime directories (`output/summaries`, `output/daily-notes`, `output/weekly-notes`, `output/pdfs`; `logs/debug/` for LLM prompt debug output (numbered files per run); `logs/launchd/` for rendered plists)
 - `src/re_ass/preferences.py`: Markdown preference parsing for categories and flat or science/method priority sections
 - `src/re_ass/ranking.py`: full-pool LLM ranking and deterministic threshold/cap selection
+- `src/re_ass/arxiv_rate_limit.py`: shared crawl-delay pacing, retry policy, and User-Agent for every request to arxiv.org (listing/abstract fetches in `arxiv_fetcher.py`, PDF downloads in `generation_service.py`)
 - `src/re_ass/paper_summariser/`: upstream-derived paper-note pipeline
 - `src/re_ass/`: application code around ranking, orchestration, state, and note updates
 
@@ -57,3 +58,4 @@ Supporting: `settings.py` (config loading), `preferences.py` (user preference pa
 - `state/papers/*.json` is the authoritative completion record; note or PDF presence alone is not.
 - `state/runs/*.json` should remain audit-friendly and include full ranking plus final-selection diagnostics.
 - `[llm]` is the base LLM config used for both ranking and summarisation. Optional `[llm-ranking]` and `[llm-summary]` sections override only the fields that differ; absent sections reuse the base `LlmConfig` object (same identity). `AppConfig` exposes `.llm`, `.ranking_llm`, and `.summary_llm`; pipeline code uses `.ranking_llm` for `PaperRanker` and `.summary_llm` for `GenerationService`.
+- arxiv.org/robots.txt declares `Crawl-delay: 15` under `User-agent: *` for `/list`, `/abs`, and `/pdf` alike; every request to arxiv.org (not `export.arxiv.org`, which is unthrottled) must go through `arxiv_rate_limit.py`'s shared limiter so listing, abstract-page, and PDF requests are paced against one clock. Once this client gets flagged (e.g. from a backlog of unthrottled historical requests), arxiv.org's CDN returns HTTP 406 that can persist per-paper even through several paced retries, and repeated rapid retries against an already-406'd resource risk being read as an attack per arXiv's own robots.txt warning — so a stuck backlog of failed PDFs should be retried in a slow, spaced-out follow-up pass (or left for the next scheduled run), not forced through in one back-to-back sweep. There is no authenticated API/token for casual PDF access; arXiv's own guidance for a flagged legitimate use case is to contact the arXiv administrators in advance, not to request a key.

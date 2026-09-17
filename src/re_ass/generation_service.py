@@ -6,7 +6,10 @@ import logging
 import math
 from pathlib import Path
 import re
+import time
+from urllib.error import HTTPError
 
+from re_ass.arxiv_rate_limit import ArxivRateLimiter, RETRY_DELAYS_SECONDS, get_shared_limiter, is_transient_http_status
 from re_ass.models import ArxivPaper
 from re_ass.paper_summariser import PaperSummariser, PaperSummariserError
 from re_ass.paper_summariser.providers import create_provider
@@ -53,9 +56,11 @@ class GenerationService:
         provider: Provider | None = None,
         paper_summariser: PaperSummariser | None = None,
         prompt_logger: PromptLogger | None = None,
+        arxiv_rate_limiter: ArxivRateLimiter | None = None,
     ) -> None:
         self.config = config
         self.prompt_logger = prompt_logger
+        self._arxiv_rate_limiter = arxiv_rate_limiter or get_shared_limiter()
         self.provider = provider or make_provider(self.config)
         if provider is not None:
             readiness_validator = getattr(self.provider, "validate_runtime_ready", None)
@@ -96,11 +101,31 @@ class GenerationService:
         return self._fallback_micro_summary(paper.summary)
 
     def stage_pdf_download(self, paper: ArxivPaper, destination_dir: Path) -> Path:
-        """Download a paper PDF to a staging directory owned by the pipeline."""
-        try:
-            return download_arxiv_pdf(paper, destination_dir, self.config)
-        except PaperSummariserError as error:
-            raise GenerationError(str(error)) from error
+        """Download a paper PDF to a staging directory owned by the pipeline.
+
+        arxiv.org/pdf sits under the same robots.txt Crawl-delay: 15 as the
+        listing/abstract-page fetches in ArxivFetcher, so downloads share that
+        process-wide pacing and retry on the same transient HTTP codes.
+        """
+        delays = list(RETRY_DELAYS_SECONDS)
+        for attempt, delay in enumerate(delays + [None], start=1):
+            self._arxiv_rate_limiter.wait_for_crawl_delay()
+            try:
+                path = download_arxiv_pdf(paper, destination_dir, self.config)
+            except PaperSummariserError as error:
+                self._arxiv_rate_limiter.mark_request_completed()
+                status_code = error.__cause__.code if isinstance(error.__cause__, HTTPError) else None
+                if status_code is None or not is_transient_http_status(status_code) or delay is None:
+                    raise GenerationError(str(error)) from error
+                LOGGER.warning(
+                    "PDF download returned HTTP %s for %s (attempt %d/%d); retrying in %ds",
+                    status_code, paper.arxiv_url, attempt, len(delays) + 1, delay,
+                )
+                time.sleep(delay)
+            else:
+                self._arxiv_rate_limiter.mark_request_completed()
+                return path
+        raise RuntimeError("unreachable")
 
     def build_paper_note_content(self, paper: ArxivPaper, staged_source_path: Path) -> str:
         """Return final note content for a paper using the vendored summariser output."""

@@ -19,6 +19,7 @@ from urllib.request import Request, urlopen
 
 from dotenv import load_dotenv
 
+from re_ass.arxiv_rate_limit import USER_AGENT
 from re_ass.llm_retry import is_retryable_llm_error
 from re_ass.models import ArxivPaper
 from re_ass.settings import LlmConfig
@@ -182,7 +183,7 @@ def download_arxiv_pdf(paper: ArxivPaper, destination_dir: Path, config: LlmConf
     pdf_url = build_pdf_url(paper.arxiv_url)
     identifier = extract_arxiv_identifier(paper.arxiv_url) or "paper"
     destination = destination_dir / f"{identifier}.pdf"
-    request = Request(pdf_url, headers={"User-Agent": "re-ass/0.1"})
+    request = Request(pdf_url, headers={"User-Agent": USER_AGENT})
 
     try:
         with urlopen(request, timeout=config.download_timeout_seconds) as response:
