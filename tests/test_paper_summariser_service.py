@@ -16,6 +16,7 @@ from re_ass.paper_summariser.service import (
     ProjectKnowledge,
     SourceMetadata,
     build_fallback_tags,
+    build_pdf_url,
     download_arxiv_pdf,
     generate_glossary,
     generate_tags,
@@ -134,7 +135,7 @@ def test_summarise_source_uses_extracted_text(tmp_path: Path) -> None:
     )
 
     assert "## Key Ideas" in result.raw_summary
-    assert result.pdf_url == "https://arxiv.org/pdf/1234.5678"
+    assert result.pdf_url == "https://export.arxiv.org/pdf/1234.5678"
     assert result.raw_summary.index("## Glossary") < result.raw_summary.index("## Tags")
     assert result.raw_summary.index("## Tags") < result.raw_summary.index("## References")
     assert provider.calls[0]["content"] == "arXiv: 1234.5678\nExtracted paper text."
@@ -753,6 +754,24 @@ def test_insert_section_places_generated_content_before_references() -> None:
 
     assert result.index("## Tags") < result.index("## References")
     assert "## Results" in result
+
+
+def test_build_pdf_url_fetches_from_export_arxiv_org_for_an_abs_url() -> None:
+    assert build_pdf_url("https://arxiv.org/abs/2609.12060") == "https://export.arxiv.org/pdf/2609.12060"
+
+
+def test_build_pdf_url_fetches_from_export_arxiv_org_for_a_versioned_pdf_url() -> None:
+    assert build_pdf_url("https://arxiv.org/pdf/2609.12060v2.pdf") == "https://export.arxiv.org/pdf/2609.12060v2"
+
+
+def test_build_pdf_url_rejects_a_non_arxiv_domain() -> None:
+    with pytest.raises(PaperSummariserError, match="Unsupported paper URL"):
+        build_pdf_url("https://example.com/abs/2609.12060")
+
+
+def test_build_pdf_url_rejects_an_unsupported_path_shape() -> None:
+    with pytest.raises(PaperSummariserError, match="Unsupported arXiv URL format"):
+        build_pdf_url("https://arxiv.org/list/astro-ph.GA/pastweek")
 
 
 class _FakePdfResponse:

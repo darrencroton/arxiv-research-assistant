@@ -155,6 +155,14 @@ class ProjectKnowledge:
 
 
 def build_pdf_url(paper_url: str) -> str:
+    """Return the export.arxiv.org URL to fetch this paper's PDF from.
+
+    `paper_url` (an arxiv.org /abs or /pdf URL, e.g. paper.arxiv_url) is the
+    human-facing canonical link and is never itself a fetch target. The
+    returned URL points at export.arxiv.org instead: arXiv's site
+    "specifically set aside for programmatic access" (see AGENTS.md), which
+    serves the same PDF bytes as arxiv.org for the same resource.
+    """
     parsed = urlparse(paper_url)
     if not parsed.netloc.casefold().endswith("arxiv.org"):
         raise PaperSummariserError(f"Unsupported paper URL for PDF fetch: {paper_url}")
@@ -170,10 +178,9 @@ def build_pdf_url(paper_url: str) -> str:
     identifier = identifier.removesuffix(".pdf")
     if not identifier:
         raise PaperSummariserError(f"Could not determine an arXiv identifier from {paper_url}")
-    # arXiv's canonical PDF URL is now extension-less (the .pdf-suffixed form
-    # 301-redirects here); requesting it directly avoids that extra hop, which
-    # is one place a flaky edge cache could return 406 instead of the redirect.
-    return f"https://arxiv.org/pdf/{identifier}"
+    # arXiv's canonical PDF URL is extension-less (the .pdf-suffixed form
+    # 301-redirects here), so request it directly rather than via the redirect.
+    return f"https://export.arxiv.org/pdf/{identifier}"
 
 
 def extract_arxiv_identifier(paper_url: str) -> str | None:

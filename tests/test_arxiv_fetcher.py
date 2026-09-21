@@ -51,6 +51,19 @@ def _abstract_html(
     )
 
 
+class _FakeHtmlResponse:
+    """Stands in for urlopen's context-managed response, serving fixed HTML."""
+
+    def __init__(self, html: str) -> None:
+        self._html = html
+
+    def __enter__(self):
+        return SimpleNamespace(read=lambda: self._html.encode("utf-8"))
+
+    def __exit__(self, *args):
+        return None
+
+
 def test_available_announcement_dates_unions_configured_categories() -> None:
     listing_html_by_category = {
         "cs.AI": _listing_html(heading="Mon, 23 Mar 2026 (showing 1 of 1 entries )", ids=["2603.10021"]),
@@ -400,16 +413,9 @@ def test_fetch_listing_html_retries_on_406_then_succeeds(monkeypatch) -> None:
         heading="Tue, 24 Mar 2026 (showing 1 of 1 entries )",
         ids=["2603.10050"],
     )
-    class _FakeResponse:
-        def __enter__(self):
-            return SimpleNamespace(read=lambda: listing_html.encode("utf-8"))
-
-        def __exit__(self, *args):
-            return None
-
     responses = iter([
         HTTPError("https://arxiv.org/list/cs.AI/pastweek", 406, "Not Acceptable", None, None),
-        _FakeResponse(),
+        _FakeHtmlResponse(listing_html),
     ])
 
     def fake_urlopen(_request, timeout):
@@ -453,6 +459,79 @@ def test_fetch_listing_html_reraises_non_transient_errors(monkeypatch) -> None:
         raise AssertionError("Expected non-transient listing errors to propagate.")
 
 
+def test_fetch_listing_html_requests_the_main_site(monkeypatch) -> None:
+    import re_ass.arxiv_fetcher as arxiv_fetcher_module
+
+    requested_urls: list[str] = []
+    listing_html = _listing_html(heading="Tue, 24 Mar 2026 (showing 1 of 1 entries )", ids=["2603.10050"])
+
+    def fake_urlopen(request, timeout):
+        requested_urls.append(request.full_url)
+        return _FakeHtmlResponse(listing_html)
+
+    monkeypatch.setattr(arxiv_fetcher_module, "urlopen", fake_urlopen)
+
+    fetcher = ArxivFetcher(page_size=10, rate_limiter=ArxivRateLimiter())
+    fetcher._category_listing("cs.AI")
+
+    assert requested_urls == ["https://arxiv.org/list/cs.AI/pastweek?show=2000"]
+
+
+def test_fetch_listing_html_exhausts_the_longer_retry_schedule_before_raising(monkeypatch) -> None:
+    from urllib.error import HTTPError
+
+    import re_ass.arxiv_fetcher as arxiv_fetcher_module
+
+    sleeps: list[float] = []
+    fake_now = [0.0]
+
+    def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        fake_now[0] += seconds
+
+    monkeypatch.setattr(arxiv_fetcher_module.time, "sleep", fake_sleep)
+    monkeypatch.setattr(arxiv_fetcher_module.time, "monotonic", lambda: fake_now[0])
+
+    def fake_urlopen(_request, timeout):
+        raise HTTPError("https://arxiv.org/list/cs.AI/pastweek", 406, "Not Acceptable", None, None)
+
+    monkeypatch.setattr(arxiv_fetcher_module, "urlopen", fake_urlopen)
+
+    fetcher = ArxivFetcher(page_size=10, rate_limiter=ArxivRateLimiter())
+
+    try:
+        fetcher._category_listing("cs.AI")
+    except HTTPError as error:
+        assert error.code == 406
+    else:
+        raise AssertionError("Expected the listing fetch to raise once its retry schedule is exhausted.")
+
+    assert sleeps == [15, 30, 90, 300, 600]
+
+
+def test_fetch_abstract_html_requests_export_arxiv_org(monkeypatch) -> None:
+    import re_ass.arxiv_fetcher as arxiv_fetcher_module
+
+    requested_urls: list[str] = []
+    abstract_html = _abstract_html(
+        source_id="2603.10050",
+        title="Example Paper",
+        authors=("Doe, J.",),
+        abstract="An example abstract.",
+    )
+
+    def fake_urlopen(request, timeout):
+        requested_urls.append(request.full_url)
+        return _FakeHtmlResponse(abstract_html)
+
+    monkeypatch.setattr(arxiv_fetcher_module, "urlopen", fake_urlopen)
+
+    fetcher = ArxivFetcher(page_size=10, rate_limiter=ArxivRateLimiter())
+    fetcher._fetch_abstract_html("2603.10050")
+
+    assert requested_urls == ["https://export.arxiv.org/abs/2603.10050"]
+
+
 def test_available_announcement_dates_respects_crawl_delay_between_categories(monkeypatch) -> None:
     import re_ass.arxiv_fetcher as arxiv_fetcher_module
 
@@ -471,19 +550,9 @@ def test_available_announcement_dates_respects_crawl_delay_between_categories(mo
         "cs.CL": _listing_html(heading="Tue, 24 Mar 2026 (showing 1 of 1 entries )", ids=["2603.10051"]),
     }
 
-    class _FakeResponse:
-        def __init__(self, html: str) -> None:
-            self._html = html
-
-        def __enter__(self):
-            return SimpleNamespace(read=lambda: self._html.encode("utf-8"))
-
-        def __exit__(self, *args):
-            return None
-
     def fake_urlopen(request, timeout):
         category = "cs.AI" if "cs.AI" in request.full_url else "cs.CL"
-        return _FakeResponse(listing_html_by_category[category])
+        return _FakeHtmlResponse(listing_html_by_category[category])
 
     monkeypatch.setattr(arxiv_fetcher_module, "urlopen", fake_urlopen)
 

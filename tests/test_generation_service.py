@@ -138,8 +138,8 @@ def test_stage_pdf_download_retries_on_406_then_succeeds(tmp_path: Path, monkeyp
     def fake_download(_paper, _destination_dir, _config):
         attempts.append(1)
         if len(attempts) == 1:
-            cause = HTTPError("https://arxiv.org/pdf/2603.15732v1.pdf", 406, "Not Acceptable", None, None)
-            raise PaperSummariserError("Downloading https://arxiv.org/pdf/2603.15732v1.pdf returned HTTP 406.") from cause
+            cause = HTTPError("https://export.arxiv.org/pdf/2603.15732v1", 406, "Not Acceptable", None, None)
+            raise PaperSummariserError("Downloading https://export.arxiv.org/pdf/2603.15732v1 returned HTTP 406.") from cause
         return destination
 
     monkeypatch.setattr(generation_service_module, "download_arxiv_pdf", fake_download)
@@ -166,8 +166,8 @@ def test_stage_pdf_download_reraises_non_transient_http_errors(tmp_path: Path, m
     )
 
     def fake_download(_paper, _destination_dir, _config):
-        cause = HTTPError("https://arxiv.org/pdf/2603.15732v1.pdf", 404, "Not Found", None, None)
-        raise PaperSummariserError("Downloading https://arxiv.org/pdf/2603.15732v1.pdf returned HTTP 404.") from cause
+        cause = HTTPError("https://export.arxiv.org/pdf/2603.15732v1", 404, "Not Found", None, None)
+        raise PaperSummariserError("Downloading https://export.arxiv.org/pdf/2603.15732v1 returned HTTP 404.") from cause
 
     monkeypatch.setattr(generation_service_module, "download_arxiv_pdf", fake_download)
 
@@ -274,7 +274,7 @@ def test_stage_pdf_download_does_not_retry_failures_without_an_http_cause(
     )
 
     def fake_download(_paper, _destination_dir, _config):
-        raise PaperSummariserError("Downloading https://arxiv.org/pdf/2603.15732v1.pdf failed: [Errno -2] Name or service not known.")
+        raise PaperSummariserError("Downloading https://export.arxiv.org/pdf/2603.15732v1 failed: [Errno -2] Name or service not known.")
 
     monkeypatch.setattr(generation_service_module, "download_arxiv_pdf", fake_download)
 

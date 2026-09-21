@@ -103,10 +103,12 @@ class GenerationService:
     def stage_pdf_download(self, paper: ArxivPaper, destination_dir: Path) -> Path:
         """Download a paper PDF to a staging directory owned by the pipeline.
 
-        arxiv.org/pdf sits under the same robots.txt Crawl-delay: 15 as the
-        listing/abstract-page fetches in ArxivFetcher, so downloads share that
-        process-wide pacing and retry on the same transient HTTP codes. A
-        short/interrupted read (fewer bytes than Content-Length promised) is
+        Downloads go to export.arxiv.org (see build_pdf_url) but still share
+        ArxivFetcher's process-wide crawl-delay clock, so a listing fetch and a
+        PDF download never land inside the same domain's crawl-delay window.
+        Transient-status retry is this method's own (ArxivFetcher's abstract
+        fallback fetch makes a single attempt with no retry of its own).
+        A short/interrupted read (fewer bytes than Content-Length promised) is
         also treated as transient -- it produces a file that looks downloaded
         but fails much later with a cryptic PDF-parsing error otherwise.
         """

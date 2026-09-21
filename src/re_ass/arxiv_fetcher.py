@@ -17,7 +17,7 @@ import arxiv
 from re_ass.arxiv_rate_limit import (
     USER_AGENT,
     ArxivRateLimiter,
-    RETRY_DELAYS_SECONDS,
+    LISTING_RETRY_DELAYS_SECONDS,
     get_shared_limiter,
     is_transient_http_status,
 )
@@ -283,9 +283,12 @@ class ArxivFetcher:
         self._rate_limiter = rate_limiter or get_shared_limiter()
 
     def _fetch_listing_html(self, category: str) -> str:
+        # export.arxiv.org's copy of this page lags by days (see AGENTS.md),
+        # so it cannot serve a "what's new" query. This is the one call site
+        # that must stay on the interactive main site.
         url = f"https://arxiv.org/list/{category}/pastweek?show={_RECENT_PAGE_SIZE}"
         request = Request(url, headers={"User-Agent": USER_AGENT})
-        delays = list(RETRY_DELAYS_SECONDS)
+        delays = list(LISTING_RETRY_DELAYS_SECONDS)
         for attempt, delay in enumerate(delays + [None], start=1):
             self._rate_limiter.wait_for_crawl_delay()
             try:
@@ -306,7 +309,10 @@ class ArxivFetcher:
         raise RuntimeError("unreachable")
 
     def _fetch_abstract_html(self, source_id: str) -> str:
-        url = f"https://arxiv.org/abs/{source_id}"
+        # export.arxiv.org mirrors individual /abs pages promptly, unlike the
+        # /list page above, and is arXiv's site "specifically set aside for
+        # programmatic access" (see AGENTS.md).
+        url = f"https://export.arxiv.org/abs/{source_id}"
         request = Request(url, headers={"User-Agent": USER_AGENT})
         self._rate_limiter.wait_for_crawl_delay()
         try:
