@@ -58,7 +58,10 @@ class _FakeHtmlResponse:
         self._html = html
 
     def __enter__(self):
-        return SimpleNamespace(read=lambda: self._html.encode("utf-8"))
+        return SimpleNamespace(
+            read=lambda: self._html.encode("utf-8"),
+            headers=SimpleNamespace(get=lambda *_args: None),
+        )
 
     def __exit__(self, *args):
         return None
@@ -433,6 +436,39 @@ def test_fetch_listing_html_retries_on_406_then_succeeds(monkeypatch) -> None:
     assert sleeps == [15]
 
 
+def test_fetch_listing_html_logs_response_detail_on_406(monkeypatch, caplog) -> None:
+    import io
+
+    from urllib.error import HTTPError
+
+    import re_ass.arxiv_fetcher as arxiv_fetcher_module
+
+    monkeypatch.setattr(arxiv_fetcher_module.time, "sleep", lambda _seconds: None)
+
+    def fake_urlopen(_request, timeout):
+        raise HTTPError(
+            "https://arxiv.org/list/cs.AI/pastweek",
+            406,
+            "Not Acceptable",
+            {"Retry-After": "300"},
+            io.BytesIO(b"Automated requests are not permitted."),
+        )
+
+    monkeypatch.setattr(arxiv_fetcher_module, "urlopen", fake_urlopen)
+
+    fetcher = ArxivFetcher(page_size=10, rate_limiter=ArxivRateLimiter())
+
+    with caplog.at_level("WARNING"):
+        try:
+            fetcher._category_listing("cs.AI")
+        except HTTPError:
+            pass
+
+    combined = "\n".join(record.getMessage() for record in caplog.records)
+    assert "Retry-After=300" in combined
+    assert "Automated requests are not permitted." in combined
+
+
 def test_fetch_listing_html_reraises_non_transient_errors(monkeypatch) -> None:
     from urllib.error import HTTPError
 
@@ -459,14 +495,14 @@ def test_fetch_listing_html_reraises_non_transient_errors(monkeypatch) -> None:
         raise AssertionError("Expected non-transient listing errors to propagate.")
 
 
-def test_fetch_listing_html_requests_the_main_site(monkeypatch) -> None:
+def test_fetch_listing_html_requests_the_main_site_with_browser_like_headers(monkeypatch) -> None:
     import re_ass.arxiv_fetcher as arxiv_fetcher_module
 
-    requested_urls: list[str] = []
     listing_html = _listing_html(heading="Tue, 24 Mar 2026 (showing 1 of 1 entries )", ids=["2603.10050"])
+    captured_requests = []
 
     def fake_urlopen(request, timeout):
-        requested_urls.append(request.full_url)
+        captured_requests.append(request)
         return _FakeHtmlResponse(listing_html)
 
     monkeypatch.setattr(arxiv_fetcher_module, "urlopen", fake_urlopen)
@@ -474,10 +510,17 @@ def test_fetch_listing_html_requests_the_main_site(monkeypatch) -> None:
     fetcher = ArxivFetcher(page_size=10, rate_limiter=ArxivRateLimiter())
     fetcher._category_listing("cs.AI")
 
-    assert requested_urls == ["https://arxiv.org/list/cs.AI/pastweek?show=2000"]
+    assert len(captured_requests) == 1
+    request = captured_requests[0]
+    assert request.full_url == "https://arxiv.org/list/cs.AI/pastweek?show=2000"
+    # Request.add_header() stores keys via str.capitalize() (e.g. "Accept-encoding"),
+    # and get_header() does a literal lookup rather than re-normalizing the name.
+    assert request.get_header("Accept") is not None
+    assert request.get_header("Accept-encoding") == "gzip, deflate"
+    assert request.get_header("Accept-language") is not None
 
 
-def test_fetch_listing_html_exhausts_the_longer_retry_schedule_before_raising(monkeypatch) -> None:
+def test_fetch_listing_html_exhausts_its_retry_schedule_before_raising(monkeypatch) -> None:
     from urllib.error import HTTPError
 
     import re_ass.arxiv_fetcher as arxiv_fetcher_module
@@ -506,7 +549,7 @@ def test_fetch_listing_html_exhausts_the_longer_retry_schedule_before_raising(mo
     else:
         raise AssertionError("Expected the listing fetch to raise once its retry schedule is exhausted.")
 
-    assert sleeps == [15, 30, 90, 300, 600]
+    assert sleeps == [15, 30, 90]
 
 
 def test_fetch_abstract_html_requests_export_arxiv_org(monkeypatch) -> None:

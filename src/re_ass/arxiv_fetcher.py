@@ -15,9 +15,11 @@ from urllib.request import Request, urlopen
 import arxiv
 
 from re_ass.arxiv_rate_limit import (
-    USER_AGENT,
+    DEFAULT_HEADERS,
     ArxivRateLimiter,
     LISTING_RETRY_DELAYS_SECONDS,
+    decode_html_response,
+    describe_http_error,
     get_shared_limiter,
     is_transient_http_status,
 )
@@ -287,20 +289,27 @@ class ArxivFetcher:
         # so it cannot serve a "what's new" query. This is the one call site
         # that must stay on the interactive main site.
         url = f"https://arxiv.org/list/{category}/pastweek?show={_RECENT_PAGE_SIZE}"
-        request = Request(url, headers={"User-Agent": USER_AGENT})
+        request = Request(url, headers=dict(DEFAULT_HEADERS))
         delays = list(LISTING_RETRY_DELAYS_SECONDS)
         for attempt, delay in enumerate(delays + [None], start=1):
             self._rate_limiter.wait_for_crawl_delay()
             try:
                 with urlopen(request, timeout=60) as response:
-                    html = response.read().decode("utf-8")
+                    html = decode_html_response(response)
             except HTTPError as exc:
                 self._rate_limiter.mark_request_completed()
+                detail = describe_http_error(exc)
                 if not is_transient_http_status(exc.code) or delay is None:
+                    LOGGER.error(
+                        "arXiv listing fetch failed for %s after %d attempt(s) with HTTP %s: %s. "
+                        "A normal scheduled run will retry this automatically; an explicit --date "
+                        "backfill will need to be re-run by hand once the day is fetchable again.",
+                        category, attempt, exc.code, detail,
+                    )
                     raise
                 LOGGER.warning(
-                    "arXiv listing fetch returned HTTP %s for %s (attempt %d/%d); retrying in %ds",
-                    exc.code, category, attempt, len(delays) + 1, delay,
+                    "arXiv listing fetch returned HTTP %s for %s (attempt %d/%d); retrying in %ds. %s",
+                    exc.code, category, attempt, len(delays) + 1, delay, detail,
                 )
                 time.sleep(delay)
             else:
@@ -313,11 +322,11 @@ class ArxivFetcher:
         # /list page above, and is arXiv's site "specifically set aside for
         # programmatic access" (see AGENTS.md).
         url = f"https://export.arxiv.org/abs/{source_id}"
-        request = Request(url, headers={"User-Agent": USER_AGENT})
+        request = Request(url, headers=dict(DEFAULT_HEADERS))
         self._rate_limiter.wait_for_crawl_delay()
         try:
             with urlopen(request, timeout=60) as response:
-                return response.read().decode("utf-8")
+                return decode_html_response(response)
         finally:
             self._rate_limiter.mark_request_completed()
 
