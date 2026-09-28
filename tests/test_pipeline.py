@@ -187,11 +187,13 @@ def _preferences() -> PreferenceConfig:
     return PreferenceConfig(priorities=("Example priority",), categories=("astro-ph.GA",))
 
 
-def _patch_pipeline(monkeypatch, fetcher) -> None:
+def _patch_pipeline(monkeypatch, fetcher, generation_service=None) -> None:
     monkeypatch.setattr("re_ass.pipeline.ArxivFetcher", lambda **_kwargs: fetcher)
     monkeypatch.setattr("re_ass.pipeline.PaperRanker", lambda **kwargs: FakeRanker(**kwargs))
     monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: _preferences())
-    monkeypatch.setattr("re_ass.pipeline.GenerationService", lambda **_kwargs: FakeGenerationService())
+    monkeypatch.setattr(
+        "re_ass.pipeline.GenerationService", lambda **_kwargs: generation_service or FakeGenerationService()
+    )
 
 
 def test_pipeline_returns_zero_and_writes_run_summary_when_no_new_papers(tmp_path: Path, monkeypatch) -> None:
@@ -461,56 +463,77 @@ def test_pipeline_skips_weekend_note_dates_when_backfilling_automatic_runs(tmp_p
     assert not (config.daily_notes_dir / "2026-03-29.md").exists()
 
 
-def test_pipeline_explicit_date_backfill_stays_on_requested_date_when_shift_enabled(tmp_path: Path, monkeypatch) -> None:
-    config = make_app_config(tmp_path, shift_announcements_to_next_weekday=True)
-    paper = make_paper(arxiv_id="2605.30101", title="Surgical Backfill Paper")
-    monkeypatch.setattr("re_ass.pipeline.ArxivFetcher", lambda **_kwargs: FakeFetcher([paper], feed_dates=[date(2026, 5, 4)]))
-    monkeypatch.setattr("re_ass.pipeline.PaperRanker", lambda **kwargs: FakeRanker(**kwargs))
-    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: _preferences())
-    monkeypatch.setattr("re_ass.pipeline.GenerationService", lambda **_kwargs: FakeGenerationService())
+@pytest.mark.parametrize(
+    "shift,announcement_date,expected_note_date",
+    [
+        (True, date(2026, 5, 7), "2026-05-08"),
+        (True, date(2026, 5, 8), "2026-05-11"),
+        (False, date(2026, 5, 7), "2026-05-07"),
+    ],
+    ids=["thursday-to-friday", "friday-to-monday", "shift-disabled"],
+)
+def test_pipeline_backfill_writes_the_note_date_a_standard_run_would_use(
+    tmp_path: Path, monkeypatch, shift, announcement_date, expected_note_date
+) -> None:
+    config = make_app_config(tmp_path, shift_announcements_to_next_weekday=shift)
+    paper = make_paper(arxiv_id="2605.30101", title="Backfill Placement Paper")
+    _patch_pipeline(monkeypatch, FakeFetcher([paper], feed_dates=[announcement_date]))
 
-    exit_code = run(config, date(2026, 5, 4), backfill=True)
+    exit_code = run(config, announcement_date, backfill=True, today=date(2026, 5, 13))
 
     assert exit_code == 0
-    assert "Surgical Backfill Paper" in (config.daily_notes_dir / "2026-05-04.md").read_text(encoding="utf-8")
-    assert not (config.daily_notes_dir / "2026-05-05.md").exists()
+    assert [path.stem for path in config.daily_notes_dir.glob("*.md")] == [expected_note_date]
+    assert "Backfill Placement Paper" in (config.daily_notes_dir / f"{expected_note_date}.md").read_text(
+        encoding="utf-8"
+    )
+    assert "Backfill Placement Paper" in NoteManager(config).weekly_note_path_for(
+        date.fromisoformat(expected_note_date), date(2026, 5, 13)
+    ).read_text(encoding="utf-8")
 
 
-def test_pipeline_backfill_leaves_current_weekly_summary_unchanged(tmp_path: Path, monkeypatch) -> None:
-    config = make_app_config(tmp_path)
+def test_pipeline_backfill_into_a_past_week_rotates_then_updates_the_archived_weekly_note(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config = make_app_config(tmp_path, shift_announcements_to_next_weekday=True)
     manager = NoteManager(config)
-    manager.bootstrap(reference_date=date(2026, 3, 23))
+    manager.bootstrap(reference_date=date(2026, 3, 24))
+    # The live note still holds last week's content, so rotation must archive it first.
     manager.weekly_note_path.write_text(
-        "# ARXIV PAPERS FOR THE WEEK 16th - 20th March 2026\n\n"
-        "## SYNTHESIS\n"
-        "\n"
-        "Live synthesis.\n"
-        "\n"
-        "---\n"
-        "## DAILY ADDITIONS\n"
-        "\n"
-        "### Sunday 22nd\n"
-        "\n"
-        "**Title:** [[Existing]]\n"
-        "\n"
-        "**Summary:** Existing summary\n"
-        "\n",
+        "# ARXIV PAPERS FOR THE WEEK 23rd - 27th March 2026\n\n"
+        "## SYNTHESIS\n\nLast week's synthesis.\n\n---\n## DAILY ADDITIONS\n\n"
+        "### Thursday 26th\n\n**Title:** [[Archived]]\n",
         encoding="utf-8",
     )
     paper = make_paper(arxiv_id="2603.30041", title="Backfill Paper")
-    monkeypatch.setattr("re_ass.pipeline.ArxivFetcher", lambda **_kwargs: FakeFetcher([paper], feed_dates=[date(2026, 3, 23)]))
-    monkeypatch.setattr("re_ass.pipeline.PaperRanker", lambda **kwargs: FakeRanker(**kwargs))
-    monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: _preferences())
-    monkeypatch.setattr("re_ass.pipeline.GenerationService", lambda **_kwargs: FakeGenerationService())
+    generation_service = FakeGenerationService()
+    _patch_pipeline(monkeypatch, FakeFetcher([paper], feed_dates=[date(2026, 3, 24)]), generation_service)
 
-    exit_code = run(config, date(2026, 3, 23), backfill=True)
+    exit_code = run(config, date(2026, 3, 24), backfill=True, today=date(2026, 3, 30))
 
     assert exit_code == 0
-    assert "Backfill Paper" in (config.daily_notes_dir / "2026-03-23.md").read_text(encoding="utf-8")
-    weekly_text = manager.weekly_note_path.read_text(encoding="utf-8")
-    assert "Live synthesis." in weekly_text
-    assert "Backfill Paper" not in weekly_text
-    assert not (config.weekly_notes_dir / "2026-03-16-weekly-arxiv.md").exists()
+    assert "Backfill Paper" in (config.daily_notes_dir / "2026-03-25.md").read_text(encoding="utf-8")
+    archived_text = (config.weekly_notes_dir / "2026-03-23-weekly-arxiv.md").read_text(encoding="utf-8")
+    assert archived_text.index("### Wednesday 25th") < archived_text.index("### Thursday 26th")
+    assert "Backfill Paper" in archived_text
+    live_text = manager.weekly_note_path.read_text(encoding="utf-8")
+    assert live_text.startswith("# ARXIV PAPERS FOR THE WEEK 30th March - 3rd April 2026")
+    assert "### " not in live_text
+    # An archived week gets its full-week synthesis budget, not the backfilled day's.
+    assert generation_service.weekly_synthesis_calls[0]["word_limit"] == config.weekly_synthesis_word_limit_end
+
+
+def test_pipeline_backfill_refuses_a_day_whose_note_date_is_still_in_the_future(tmp_path: Path, monkeypatch) -> None:
+    config = make_app_config(tmp_path, shift_announcements_to_next_weekday=True)
+    fetcher = FakeFetcher([make_paper(arxiv_id="2605.30111", title="Too Early Paper")], feed_dates=[date(2026, 5, 8)])
+    _patch_pipeline(monkeypatch, fetcher)
+
+    exit_code = run(config, date(2026, 5, 8), backfill=True, today=date(2026, 5, 9))
+
+    assert exit_code == 1
+    run_summary = json.loads(next(config.state_runs_dir.glob("*overall-fatal*.json")).read_text(encoding="utf-8"))
+    assert "not due yet" in run_summary["fatal_error"]
+    assert "2026-05-11" in run_summary["fatal_error"]
+    assert not any(config.daily_notes_dir.glob("*.md"))
 
 
 def test_pipeline_backfill_renders_daily_template_for_target_date(tmp_path: Path, monkeypatch) -> None:
@@ -526,7 +549,7 @@ def test_pipeline_backfill_renders_daily_template_for_target_date(tmp_path: Path
     monkeypatch.setattr("re_ass.pipeline.load_preferences", lambda *_args, **_kwargs: _preferences())
     monkeypatch.setattr("re_ass.pipeline.GenerationService", lambda **_kwargs: FakeGenerationService())
 
-    exit_code = run(config, date(2026, 3, 23), backfill=True)
+    exit_code = run(config, date(2026, 3, 23), backfill=True, today=date(2026, 3, 30))
 
     assert exit_code == 0
     daily_text = (config.daily_notes_dir / "2026-03-23.md").read_text(encoding="utf-8")
@@ -877,7 +900,7 @@ def test_pipeline_warns_and_continues_when_gap_fallback_fails(tmp_path: Path, mo
     assert exit_code == 0
     combined = "\n".join(record.getMessage() for record in caplog.records)
     assert "--date 2026-09-23" in combined
-    assert "leaves the weekly note untouched" in combined
+    assert "updating the daily note and the weekly note" in combined
 
     assert "Feed Day Only Paper" in (config.daily_notes_dir / "2026-09-24.md").read_text(encoding="utf-8")
     assert not (config.daily_notes_dir / "2026-09-23.md").exists()
@@ -947,7 +970,7 @@ def test_pipeline_backfill_uses_feed_when_date_matches_feed_day(tmp_path: Path, 
     fetcher = FakeFetcher([paper], feed_dates=[date(2026, 9, 24)])
     _patch_pipeline(monkeypatch, fetcher)
 
-    exit_code = run(config, date(2026, 9, 24), backfill=True)
+    exit_code = run(config, date(2026, 9, 24), backfill=True, today=date(2026, 9, 30))
 
     assert exit_code == 0
     assert fetcher.recent_listing_calls == []
@@ -960,7 +983,7 @@ def test_pipeline_backfill_uses_recent_listing_for_past_date(tmp_path: Path, mon
     fetcher = FakeFetcher([paper], feed_dates=[date(2026, 9, 24)], recent_dates=[date(2026, 9, 21)])
     _patch_pipeline(monkeypatch, fetcher)
 
-    exit_code = run(config, date(2026, 9, 21), backfill=True)
+    exit_code = run(config, date(2026, 9, 21), backfill=True, today=date(2026, 9, 30))
 
     assert exit_code == 0
     assert fetcher.recent_listing_calls == [("astro-ph.GA",)]
@@ -976,7 +999,7 @@ def test_pipeline_backfill_never_moves_the_marker_backwards(tmp_path: Path, monk
     fetcher = FakeFetcher([paper], feed_dates=[date(2026, 9, 23)])
     _patch_pipeline(monkeypatch, fetcher)
 
-    exit_code = run(config, date(2026, 9, 23), backfill=True)
+    exit_code = run(config, date(2026, 9, 23), backfill=True, today=date(2026, 9, 30))
 
     assert exit_code == 0
     assert "Backfill Older Day Paper" in (config.daily_notes_dir / "2026-09-23.md").read_text(encoding="utf-8")
@@ -992,7 +1015,7 @@ def test_pipeline_backfill_reports_recent_listing_failure_when_date_absent_and_f
     fetcher = FakeFetcher([], feed_dates=[date(2026, 9, 24)], recent_listing_ok=False)
     _patch_pipeline(monkeypatch, fetcher)
 
-    exit_code = run(config, date(2026, 9, 20), backfill=True)
+    exit_code = run(config, date(2026, 9, 20), backfill=True, today=date(2026, 9, 30))
 
     assert exit_code == 1
     run_summary = json.loads(
@@ -1010,7 +1033,7 @@ def test_pipeline_backfill_reports_not_visible_when_date_absent_after_successful
     fetcher = FakeFetcher([], feed_dates=[date(2026, 9, 24)], recent_dates=[date(2026, 9, 22)])
     _patch_pipeline(monkeypatch, fetcher)
 
-    exit_code = run(config, date(2026, 9, 20), backfill=True)
+    exit_code = run(config, date(2026, 9, 20), backfill=True, today=date(2026, 9, 30))
 
     assert exit_code == 1
     run_summary = json.loads(
@@ -1055,7 +1078,7 @@ def test_pipeline_backfill_of_a_snapshotted_day_makes_no_recent_listing_request(
     fetcher = FakeFetcher([make_paper(arxiv_id="2609.50020", title="Snapshot Backfill Paper")], feed_dates=())
     _patch_pipeline(monkeypatch, fetcher)
 
-    assert run(config, date(2026, 9, 21), backfill=True) == 0
+    assert run(config, date(2026, 9, 21), backfill=True, today=date(2026, 9, 30)) == 0
 
     assert fetcher.recent_listing_calls == []
     run_summary = json.loads(next(config.state_runs_dir.glob("*announcement-2026-09-21*.json")).read_text(encoding="utf-8"))

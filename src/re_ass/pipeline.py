@@ -25,10 +25,18 @@ LOGGER = logging.getLogger(__name__)
 _WEEKDAY_NAMES = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 
 
-def _weekly_synthesis_word_limit(config: AppConfig, note_date: date) -> int:
+def _weekly_synthesis_word_limit(config: AppConfig, note_date: date, reference_date: date) -> int:
+    """Synthesis budget for the note's week, scaled to the latest day that week can hold.
+
+    That is the later of note_date and reference_date within the same week, or
+    the week's last day once reference_date has moved on to a later week, so
+    backfilling an earlier day never shrinks a synthesis covering later days.
+    """
     rotation_index = _WEEKDAY_NAMES.index(config.rotation_day)
-    day_index = (note_date.weekday() - rotation_index) % 7
-    day_index = min(day_index, 4)
+    note_offset = (note_date.weekday() - rotation_index) % 7
+    reference_offset = (reference_date.weekday() - rotation_index) % 7
+    same_week = note_date - timedelta(days=note_offset) == reference_date - timedelta(days=reference_offset)
+    day_index = min(max(note_offset, reference_offset) if same_week else 4, 4)
     start = config.weekly_synthesis_word_limit_start
     end = config.weekly_synthesis_word_limit_end
     if start == end:
@@ -254,6 +262,11 @@ def _next_weekday(day: date) -> date:
     return candidate
 
 
+def _backfill_note_date(config: AppConfig, announcement_date: date) -> date:
+    """Note date a standard run would have used for this announcement day."""
+    return _next_weekday(announcement_date) if config.shift_announcements_to_next_weekday else announcement_date
+
+
 def _listing_gap_dates(
     listed_dates: Collection[date],
     *,
@@ -356,8 +369,8 @@ def _warn_unfilled_listing_gap(gap_dates: list[date]) -> None:
         "completed-announcement marker will advance past these dates, so they will not be "
         "retried automatically. Only days still visible in arXiv's recent listing can be "
         "recovered. To recover a day, run:\n%s\n"
-        "Each backfill writes that announcement day into the daily note of the same date "
-        "(no next-weekday shift) and leaves the weekly note untouched.",
+        "Each backfill writes that announcement day where a standard run would have, "
+        "updating the daily note and the weekly note for that note date.",
         gap_dates[0].isoformat(),
         gap_dates[-1].isoformat(),
         commands,
@@ -477,10 +490,55 @@ def _process_selected_papers(
     return successful_papers
 
 
+def _publish_weekly_note(
+    config: AppConfig,
+    note_manager: NoteManager,
+    generation_service: GenerationService,
+    *,
+    note_date: date,
+    reference_date: date,
+    successful_papers: list[ProcessedPaper],
+    weekly_interest_papers: list[ArxivPaper],
+) -> None:
+    """Write an announcement day's results into the weekly note.
+
+    With successful papers: the regenerated synthesis and day block. With
+    none: only the interest bullets (existing synthesis kept), if there are
+    any. The note is resolved against reference_date, so a past note_date
+    lands in the archived weekly note. Callers own the daily note and any
+    run-summary bookkeeping.
+    """
+    if successful_papers:
+        existing_synthesis = note_manager.read_weekly_synthesis(note_date, reference_date=reference_date)
+        weekly_additions = note_manager.preview_weekly_additions(
+            note_date,
+            successful_papers,
+            reference_date=reference_date,
+        )
+        synthesis = generation_service.generate_weekly_synthesis(
+            existing_synthesis,
+            weekly_additions,
+            word_limit=_weekly_synthesis_word_limit(config, note_date, reference_date),
+            max_tokens=config.weekly_synthesis_max_tokens,
+        )
+    elif weekly_interest_papers:
+        synthesis = note_manager.read_weekly_synthesis(note_date, reference_date=reference_date)
+    else:
+        return
+    note_manager.update_weekly_note(
+        note_date,
+        successful_papers,
+        synthesis,
+        interest_papers=weekly_interest_papers,
+        reference_date=reference_date,
+    )
+
+
 def _run_announcement_day(
     config: AppConfig,
     *,
     invocation_date: date,
+    reference_date: date,
     announcement_date: date,
     note_date: date,
     available_dates: list[date],
@@ -490,7 +548,6 @@ def _run_announcement_day(
     state_store: StateStore,
     generation_service: GenerationService,
     fetcher: ArxivFetcher,
-    backfill: bool,
     listing_summary: dict[str, object],
 ) -> int:
     run_summary = _run_summary_base(invocation_date, _llm_stamp(config))
@@ -543,7 +600,7 @@ def _run_announcement_day(
 
         if not selected_papers and candidates:
             # Candidates were fetched and ranked but none cleared any threshold.
-            note_manager.mark_daily_no_papers(note_date, reference_date=invocation_date)
+            note_manager.mark_daily_no_papers(note_date, reference_date=reference_date)
             run_summary["daily_note_updated"] = True
             LOGGER.info(
                 "No papers cleared the selection threshold for announcement date %s; daily note marked with no-papers placeholder.",
@@ -551,16 +608,16 @@ def _run_announcement_day(
             )
             # Partial-match papers (e.g. dual_match failures) may still appear in
             # weekly_interest even when nothing was selected — preserve them.
-            if weekly_interest_papers and not backfill:
-                existing_synthesis = note_manager.read_weekly_synthesis(note_date, reference_date=invocation_date)
-                note_manager.update_weekly_note(
-                    note_date,
-                    [],
-                    existing_synthesis,
-                    interest_papers=weekly_interest_papers,
-                    reference_date=invocation_date,
-                )
-                run_summary["weekly_note_updated"] = True
+            _publish_weekly_note(
+                config,
+                note_manager,
+                generation_service,
+                note_date=note_date,
+                reference_date=reference_date,
+                successful_papers=[],
+                weekly_interest_papers=weekly_interest_papers,
+            )
+            run_summary["weekly_note_updated"] = bool(weekly_interest_papers)
             successful_papers = []
         elif not selected_papers:
             # No candidates to process (all already completed or truly empty day).
@@ -573,47 +630,25 @@ def _run_announcement_day(
                 selected_papers=selected_papers,
                 run_summary=run_summary,
             )
-
             if successful_papers:
-                note_manager.update_daily_note(note_date, successful_papers[0], reference_date=invocation_date)
+                note_manager.update_daily_note(note_date, successful_papers[0], reference_date=reference_date)
                 run_summary["daily_note_updated"] = True
-
-                if not backfill:
-                    existing_synthesis = note_manager.read_weekly_synthesis(note_date, reference_date=invocation_date)
-                    weekly_additions = note_manager.preview_weekly_additions(
-                        note_date,
-                        successful_papers,
-                        reference_date=invocation_date,
-                    )
-                    synthesis = generation_service.generate_weekly_synthesis(
-                        existing_synthesis,
-                        weekly_additions,
-                        word_limit=_weekly_synthesis_word_limit(config, note_date),
-                        max_tokens=config.weekly_synthesis_max_tokens,
-                    )
-                    note_manager.update_weekly_note(
-                        note_date,
-                        successful_papers,
-                        synthesis,
-                        interest_papers=weekly_interest_papers,
-                        reference_date=invocation_date,
-                    )
-                    run_summary["weekly_note_updated"] = True
-            elif weekly_interest_papers and not backfill:
-                existing_synthesis = note_manager.read_weekly_synthesis(note_date, reference_date=invocation_date)
-                note_manager.update_weekly_note(
-                    note_date,
-                    [],
-                    existing_synthesis,
-                    interest_papers=weekly_interest_papers,
-                    reference_date=invocation_date,
-                )
-                run_summary["weekly_note_updated"] = True
+            _publish_weekly_note(
+                config,
+                note_manager,
+                generation_service,
+                note_date=note_date,
+                reference_date=reference_date,
+                successful_papers=successful_papers,
+                weekly_interest_papers=weekly_interest_papers,
+            )
+            run_summary["weekly_note_updated"] = bool(successful_papers or weekly_interest_papers)
+            if not successful_papers and weekly_interest_papers:
                 LOGGER.info(
                     "No papers completed successfully for announcement date %s; weekly interest bullets were added without updating the daily note or synthesis.",
                     announcement_date.isoformat(),
                 )
-            else:
+            elif not successful_papers:
                 LOGGER.info(
                     "No papers completed successfully for announcement date %s; daily and weekly summaries were left unchanged.",
                     announcement_date.isoformat(),
@@ -664,18 +699,38 @@ def _run_announcement_day(
         return 1
 
 
-def run(config: AppConfig, run_date: date | None = None, *, backfill: bool = False) -> int:
-    """Execute the full workflow and return an exit code."""
-    invocation_date = run_date or date.today()
+def run(
+    config: AppConfig,
+    run_date: date | None = None,
+    *,
+    backfill: bool = False,
+    today: date | None = None,
+) -> int:
+    """Execute the full workflow and return an exit code.
+
+    A backfill's run_date names the announcement day to process, so notes are
+    resolved against today (injectable for tests) instead; a standard run is
+    resolved against its own invocation date.
+    """
+    current_date = today or date.today()
+    invocation_date = run_date or current_date
+    reference_date = current_date if backfill else invocation_date
     note_manager = NoteManager(config)
     state_store = StateStore(config)
 
     overall_summary = _run_summary_base(invocation_date, _llm_stamp(config))
 
     try:
-        _bootstrap_runtime(config, note_manager, state_store, reference_date=invocation_date)
-        if not backfill:
-            note_manager.rotate_weekly_note_if_needed(invocation_date)
+        _bootstrap_runtime(config, note_manager, state_store, reference_date=reference_date)
+        # Rotate before any weekly write so a backfill into a past week never
+        # creates an archive file that a later rotation would collide with.
+        note_manager.rotate_weekly_note_if_needed(reference_date)
+        backfill_note_date = _backfill_note_date(config, invocation_date) if backfill else None
+        if backfill_note_date is not None and backfill_note_date > reference_date:
+            raise ValueError(
+                f"Announcement date {invocation_date.isoformat()} is not due yet: it maps to note date "
+                f"{backfill_note_date.isoformat()}, after {reference_date.isoformat()}. The scheduled run will process it."
+            )
 
         preferences = load_preferences(config.preferences_file)
         prompt_logger = PromptLogger(config.logs_root / "debug")
@@ -746,7 +801,7 @@ def run(config: AppConfig, run_date: date | None = None, *, backfill: bool = Fal
 
         if backfill:
             pending_dates = [invocation_date]
-            note_date_map = {invocation_date: invocation_date}
+            note_date_map = {invocation_date: backfill_note_date}
             ready_dates = pending_dates
         else:
             pending_dates = _pending_announcement_dates(
@@ -809,6 +864,7 @@ def run(config: AppConfig, run_date: date | None = None, *, backfill: bool = Fal
             exit_code = _run_announcement_day(
                 config,
                 invocation_date=invocation_date,
+                reference_date=reference_date,
                 announcement_date=announcement_date,
                 note_date=note_date,
                 available_dates=available_dates,
@@ -818,7 +874,6 @@ def run(config: AppConfig, run_date: date | None = None, *, backfill: bool = Fal
                 state_store=state_store,
                 generation_service=generation_service,
                 fetcher=fetcher,
-                backfill=backfill,
                 listing_summary=listing_summary,
             )
             if exit_code != 0:

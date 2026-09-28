@@ -191,6 +191,7 @@ def _build_weekly_additions(
     *,
     interest_papers: list[ArxivPaper] | None = None,
     link_style: str,
+    rotation_day: str,
 ) -> str:
     day_heading = _format_day_heading(run_date)
     entries = [
@@ -207,7 +208,7 @@ def _build_weekly_additions(
     if content_parts:
         block_parts.extend(["", "\n\n".join(content_parts)])
     day_block = "\n".join(block_parts)
-    return _upsert_day_block(existing_additions, day_heading, day_block)
+    return _upsert_day_block(existing_additions, day_heading, day_block, rotation_day)
 
 
 def _render_section(heading: str, body: str, *, has_suffix: bool) -> str:
@@ -241,24 +242,25 @@ def _parse_day_blocks(existing_body: str) -> list[tuple[str, str]]:
     return blocks
 
 
-def _upsert_day_block(existing_body: str, day_heading: str, new_block: str) -> str:
+def _day_heading_week_offset(heading: str, rotation_day: str) -> int:
+    """Position of a "<Weekday> <ordinal>" heading in the week; unparsable headings sort last."""
+    weekday = _ROTATION_DAYS.get(heading.split(" ", 1)[0].lower())
+    if weekday is None:
+        return len(_ROTATION_DAYS)
+    return (weekday - _ROTATION_DAYS[rotation_day]) % 7
+
+
+def _upsert_day_block(existing_body: str, day_heading: str, new_block: str, rotation_day: str) -> str:
+    """Replace or add a day block, keeping blocks in week order (stable for ties)."""
     blocks = _parse_day_blocks(existing_body)
     if not blocks:
         return new_block.rstrip()
 
-    updated_blocks: list[str] = []
-    replaced = False
-    for heading, block in blocks:
-        if heading == day_heading:
-            updated_blocks.append(new_block.rstrip())
-            replaced = True
-        else:
-            updated_blocks.append(block.rstrip())
-
-    if not replaced:
-        updated_blocks.append(new_block.rstrip())
-
-    return "\n\n---\n\n".join(updated_blocks).strip()
+    updated = [(heading, new_block if heading == day_heading else block) for heading, block in blocks]
+    if all(heading != day_heading for heading, _ in blocks):
+        updated.append((day_heading, new_block))
+    updated.sort(key=lambda item: _day_heading_week_offset(item[0], rotation_day))
+    return "\n\n---\n\n".join(block.rstrip() for _, block in updated).strip()
 
 
 def _ordinal(day_number: int) -> str:
@@ -511,6 +513,7 @@ class NoteManager:
             note_date,
             papers,
             link_style=self.config.link_style,
+            rotation_day=self.config.rotation_day,
         )
 
     def mark_daily_no_papers(
@@ -585,6 +588,7 @@ class NoteManager:
             papers,
             interest_papers=interest_papers,
             link_style=self.config.link_style,
+            rotation_day=self.config.rotation_day,
         )
         updated = _replace_section(updated, self.config.weekly_additions_heading, additions)
 

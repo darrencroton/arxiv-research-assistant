@@ -166,7 +166,7 @@ Backfill a specific day:
 uv run re-ass --date 2026-03-21
 ```
 
-An explicit `--date` backfill processes that announcement day directly without rotating the current weekly note. The day must be in a saved listing snapshot or still visible in arXiv's recent listing (roughly the past five announcement days).
+An explicit `--date` backfill processes that announcement day and writes it where a normal run would have: with `notes.shift_announcements_to_next_weekday = true` a Thursday announcement lands in Friday's note (Friday in Monday's), and the weekly note for that week is updated too, including an archived past week. A day whose note date is still in the future is refused; the scheduled run will process it. The day must be in a saved listing snapshot or still visible in arXiv's recent listing (roughly the past five announcement days).
 
 ## Directory Layout
 
