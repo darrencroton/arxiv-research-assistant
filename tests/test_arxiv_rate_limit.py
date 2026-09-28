@@ -4,7 +4,7 @@ import zlib
 from types import SimpleNamespace
 from urllib.error import HTTPError
 
-from re_ass.arxiv_rate_limit import decode_html_response, describe_http_error
+from re_ass.arxiv_rate_limit import decode_response_text, describe_http_error
 
 
 def _fake_response(body: bytes, *, content_encoding: str | None = None):
@@ -18,37 +18,37 @@ def _fake_response(body: bytes, *, content_encoding: str | None = None):
     )
 
 
-def test_decode_html_response_passes_through_identity() -> None:
+def test_decode_response_text_passes_through_identity() -> None:
     response = _fake_response("<html>hello</html>".encode("utf-8"))
 
-    assert decode_html_response(response) == "<html>hello</html>"
+    assert decode_response_text(response) == "<html>hello</html>"
 
 
-def test_decode_html_response_ungzips_when_content_encoding_is_gzip() -> None:
+def test_decode_response_text_ungzips_when_content_encoding_is_gzip() -> None:
     html = "<html>gzipped</html>"
     response = _fake_response(
         gzip.compress(html.encode("utf-8")), content_encoding="gzip"
     )
 
-    assert decode_html_response(response) == html
+    assert decode_response_text(response) == html
 
 
-def test_decode_html_response_inflates_zlib_wrapped_deflate() -> None:
+def test_decode_response_text_inflates_zlib_wrapped_deflate() -> None:
     html = "<html>deflated</html>"
     response = _fake_response(
         zlib.compress(html.encode("utf-8")), content_encoding="deflate"
     )
 
-    assert decode_html_response(response) == html
+    assert decode_response_text(response) == html
 
 
-def test_decode_html_response_inflates_raw_deflate() -> None:
+def test_decode_response_text_inflates_raw_deflate() -> None:
     html = "<html>raw deflated</html>"
     compressor = zlib.compressobj(wbits=-zlib.MAX_WBITS)
     raw = compressor.compress(html.encode("utf-8")) + compressor.flush()
     response = _fake_response(raw, content_encoding="deflate")
 
-    assert decode_html_response(response) == html
+    assert decode_response_text(response) == html
 
 
 def test_describe_http_error_reports_retry_after_and_body() -> None:

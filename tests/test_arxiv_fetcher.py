@@ -1,11 +1,23 @@
 from datetime import date, datetime, timezone
+import http.client
+from pathlib import Path
 from types import SimpleNamespace
+from urllib.error import HTTPError
+import xml.etree.ElementTree as ET
+import zlib
 
 import arxiv
+import pytest
 
-from re_ass.arxiv_fetcher import ArxivFetcher, _normalize_author_name
+from re_ass.arxiv_fetcher import ArxivFetcher, _normalize_author_name, parse_rss_listing
 from re_ass.arxiv_rate_limit import ArxivRateLimiter, get_shared_limiter
 from re_ass.models import PreferenceConfig
+
+_FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+
+def _rss_fixture() -> str:
+    return (_FIXTURES_DIR / "rss-astro-ph-ga-2026-09-24.xml").read_text(encoding="utf-8")
 
 
 def _listing_html(*, heading: str, ids: list[str]) -> str:
@@ -79,6 +91,8 @@ def test_available_announcement_dates_unions_configured_categories() -> None:
         listing_fetcher=lambda category: listing_html_by_category[category],
     )
 
+    fetcher.load_recent_listings(("cs.AI", "cs.CL"))
+
     assert fetcher.available_announcement_dates(("cs.AI", "cs.CL")) == (
         date(2026, 3, 23),
         date(2026, 3, 24),
@@ -139,6 +153,7 @@ def test_collect_candidates_fetches_all_listing_ids_for_announcement_date() -> N
         listing_fetcher=lambda category: listing_html_by_category[category],
     )
 
+    fetcher.load_recent_listings(("cs.AI", "cs.CL"))
     papers = fetcher.collect_candidates(
         PreferenceConfig(priorities=("Agents",), categories=("cs.AI", "cs.CL")),
         announcement_date=announcement_day,
@@ -181,6 +196,7 @@ def test_collect_candidates_skips_completed_paper_keys_before_metadata_fetch() -
         listing_fetcher=lambda category: listing_html_by_category[category],
     )
 
+    fetcher.load_recent_listings(("cs.AI",))
     papers = fetcher.collect_candidates(
         PreferenceConfig(priorities=("Agents",), categories=("cs.AI",)),
         announcement_date=announcement_day,
@@ -202,6 +218,7 @@ def test_collect_candidates_returns_empty_when_all_listing_ids_are_already_compl
         ),
     )
 
+    fetcher.load_recent_listings(("cs.AI",))
     papers = fetcher.collect_candidates(
         PreferenceConfig(priorities=("Agents",), categories=("cs.AI",)),
         announcement_date=announcement_day,
@@ -221,6 +238,7 @@ def test_collect_candidates_raises_for_announcement_date_outside_visible_listing
         ),
     )
 
+    fetcher.load_recent_listings(("cs.AI",))
     try:
         fetcher.collect_candidates(
             PreferenceConfig(priorities=("Agents",), categories=("cs.AI",)),
@@ -277,6 +295,7 @@ def test_collect_candidates_falls_back_to_abstract_pages_on_export_api_429() -> 
         abstract_fetcher=lambda source_id: abstract_html_by_id[source_id],
     )
 
+    fetcher.load_recent_listings(("cs.AI", "cs.CL"))
     papers = fetcher.collect_candidates(
         PreferenceConfig(priorities=("Agents",), categories=("cs.AI", "cs.CL")),
         announcement_date=announcement_day,
@@ -327,6 +346,7 @@ def test_collect_candidates_fallback_normalizes_author_names() -> None:
         abstract_fetcher=lambda source_id: abstract_html_by_id[source_id],
     )
 
+    fetcher.load_recent_listings(("cs.AI",))
     papers = fetcher.collect_candidates(
         PreferenceConfig(priorities=("Agents",), categories=("cs.AI",)),
         announcement_date=announcement_day,
@@ -361,6 +381,7 @@ def test_collect_candidates_falls_back_to_abstract_pages_on_export_api_503() -> 
         abstract_fetcher=lambda source_id: abstract_html_by_id[source_id],
     )
 
+    fetcher.load_recent_listings(("cs.AI",))
     papers = fetcher.collect_candidates(
         PreferenceConfig(priorities=("Agents",), categories=("cs.AI",)),
         announcement_date=announcement_day,
@@ -380,6 +401,7 @@ def test_collect_candidates_reraises_non_429_client_export_errors() -> None:
         abstract_fetcher=lambda _source_id: (_ for _ in ()).throw(AssertionError("Fallback should not be used")),
     )
 
+    fetcher.load_recent_listings(("cs.AI",))
     try:
         fetcher.collect_candidates(
             PreferenceConfig(priorities=("Agents",), categories=("cs.AI",)),
@@ -398,8 +420,6 @@ def test_arxiv_fetcher_defaults_to_the_shared_rate_limiter() -> None:
 
 
 def test_fetch_listing_html_retries_on_406_then_succeeds(monkeypatch) -> None:
-    from urllib.error import HTTPError
-
     import re_ass.arxiv_fetcher as arxiv_fetcher_module
 
     sleeps: list[float] = []
@@ -430,16 +450,15 @@ def test_fetch_listing_html_retries_on_406_then_succeeds(monkeypatch) -> None:
     monkeypatch.setattr(arxiv_fetcher_module, "urlopen", fake_urlopen)
 
     fetcher = ArxivFetcher(page_size=10, rate_limiter=ArxivRateLimiter())
-    listing = fetcher._category_listing("cs.AI")
+    ok = fetcher.load_recent_listings(("cs.AI",))
 
-    assert listing == {date(2026, 3, 24): ["2603.10050"]}
+    assert ok is True
+    assert fetcher._category_listing("cs.AI") == {date(2026, 3, 24): ["2603.10050"]}
     assert sleeps == [15]
 
 
 def test_fetch_listing_html_logs_response_detail_on_406(monkeypatch, caplog) -> None:
     import io
-
-    from urllib.error import HTTPError
 
     import re_ass.arxiv_fetcher as arxiv_fetcher_module
 
@@ -459,19 +478,15 @@ def test_fetch_listing_html_logs_response_detail_on_406(monkeypatch, caplog) -> 
     fetcher = ArxivFetcher(page_size=10, rate_limiter=ArxivRateLimiter())
 
     with caplog.at_level("WARNING"):
-        try:
-            fetcher._category_listing("cs.AI")
-        except HTTPError:
-            pass
+        ok = fetcher.load_recent_listings(("cs.AI",))
 
+    assert ok is False
     combined = "\n".join(record.getMessage() for record in caplog.records)
     assert "Retry-After=300" in combined
     assert "Automated requests are not permitted." in combined
 
 
-def test_fetch_listing_html_reraises_non_transient_errors(monkeypatch) -> None:
-    from urllib.error import HTTPError
-
+def test_load_recent_listings_returns_false_on_non_transient_error(monkeypatch, caplog) -> None:
     import re_ass.arxiv_fetcher as arxiv_fetcher_module
 
     monkeypatch.setattr(
@@ -487,15 +502,14 @@ def test_fetch_listing_html_reraises_non_transient_errors(monkeypatch) -> None:
 
     fetcher = ArxivFetcher(page_size=10, rate_limiter=ArxivRateLimiter())
 
-    try:
-        fetcher._category_listing("cs.AI")
-    except HTTPError as error:
-        assert error.code == 404
-    else:
-        raise AssertionError("Expected non-transient listing errors to propagate.")
+    with caplog.at_level("WARNING"):
+        ok = fetcher.load_recent_listings(("cs.AI",))
+
+    assert ok is False
+    assert any("cs.AI" in record.getMessage() for record in caplog.records)
 
 
-def test_fetch_listing_html_requests_the_main_site_with_browser_like_headers(monkeypatch) -> None:
+def test_fetch_listing_html_sends_default_headers(monkeypatch) -> None:
     import re_ass.arxiv_fetcher as arxiv_fetcher_module
 
     listing_html = _listing_html(heading="Tue, 24 Mar 2026 (showing 1 of 1 entries )", ids=["2603.10050"])
@@ -508,7 +522,7 @@ def test_fetch_listing_html_requests_the_main_site_with_browser_like_headers(mon
     monkeypatch.setattr(arxiv_fetcher_module, "urlopen", fake_urlopen)
 
     fetcher = ArxivFetcher(page_size=10, rate_limiter=ArxivRateLimiter())
-    fetcher._category_listing("cs.AI")
+    fetcher.load_recent_listings(("cs.AI",))
 
     assert len(captured_requests) == 1
     request = captured_requests[0]
@@ -520,9 +534,7 @@ def test_fetch_listing_html_requests_the_main_site_with_browser_like_headers(mon
     assert request.get_header("Accept-language") is not None
 
 
-def test_fetch_listing_html_exhausts_its_retry_schedule_before_raising(monkeypatch) -> None:
-    from urllib.error import HTTPError
-
+def test_load_recent_listings_returns_false_after_exhausting_retries_on_406(monkeypatch) -> None:
     import re_ass.arxiv_fetcher as arxiv_fetcher_module
 
     sleeps: list[float] = []
@@ -541,14 +553,9 @@ def test_fetch_listing_html_exhausts_its_retry_schedule_before_raising(monkeypat
     monkeypatch.setattr(arxiv_fetcher_module, "urlopen", fake_urlopen)
 
     fetcher = ArxivFetcher(page_size=10, rate_limiter=ArxivRateLimiter())
+    ok = fetcher.load_recent_listings(("cs.AI",))
 
-    try:
-        fetcher._category_listing("cs.AI")
-    except HTTPError as error:
-        assert error.code == 406
-    else:
-        raise AssertionError("Expected the listing fetch to raise once its retry schedule is exhausted.")
-
+    assert ok is False
     assert sleeps == [15, 30, 90]
 
 
@@ -575,7 +582,7 @@ def test_fetch_abstract_html_requests_export_arxiv_org(monkeypatch) -> None:
     assert requested_urls == ["https://export.arxiv.org/abs/2603.10050"]
 
 
-def test_available_announcement_dates_respects_crawl_delay_between_categories(monkeypatch) -> None:
+def test_load_recent_listings_respects_crawl_delay_between_categories(monkeypatch) -> None:
     import re_ass.arxiv_fetcher as arxiv_fetcher_module
 
     sleeps: list[float] = []
@@ -600,8 +607,288 @@ def test_available_announcement_dates_respects_crawl_delay_between_categories(mo
     monkeypatch.setattr(arxiv_fetcher_module, "urlopen", fake_urlopen)
 
     fetcher = ArxivFetcher(page_size=10, rate_limiter=ArxivRateLimiter())
+    fetcher.load_recent_listings(("cs.AI", "cs.CL"))
     dates = fetcher.available_announcement_dates(("cs.AI", "cs.CL"))
 
     assert dates == (date(2026, 3, 24),)
     # No wait before the first request; a full 15s crawl-delay before the second.
     assert sleeps == [15]
+
+
+def test_parse_rss_listing_lists_new_and_cross_items_per_category_and_date() -> None:
+    listing = parse_rss_listing(_rss_fixture(), ("astro-ph.GA", "astro-ph.CO", "cs.AI"))
+
+    assert listing == {
+        "astro-ph.GA": {
+            date(2026, 9, 24): ["2609.26877", "2609.26993", "2609.27048"],
+        },
+        "astro-ph.CO": {
+            date(2026, 9, 24): ["2609.26993"],
+        },
+        "cs.AI": {},
+    }
+
+
+def test_parse_rss_listing_skips_items_missing_required_fields(caplog) -> None:
+    xml_text = """<rss xmlns:arxiv="http://arxiv.org/schemas/atom">
+<channel>
+<item>
+<link>  https://arxiv.org/abs/2609.00001  </link>
+<pubDate> Thu, 24 Sep 2026 00:00:00 -0400 </pubDate>
+<category> astro-ph.GA </category>
+<arxiv:announce_type> new </arxiv:announce_type>
+</item>
+<item>
+<pubDate>Thu, 24 Sep 2026 00:00:00 -0400</pubDate>
+<category>astro-ph.GA</category>
+<arxiv:announce_type>new</arxiv:announce_type>
+</item>
+<item>
+<link>https://arxiv.org/abs/2609.00003</link>
+<pubDate>not-a-real-date</pubDate>
+<category>astro-ph.GA</category>
+<arxiv:announce_type>cross</arxiv:announce_type>
+</item>
+</channel>
+</rss>"""
+
+    with caplog.at_level("WARNING"):
+        listing = parse_rss_listing(xml_text, ("astro-ph.GA",))
+
+    assert listing == {"astro-ph.GA": {date(2026, 9, 24): ["2609.00001"]}}
+    warnings = [record.getMessage() for record in caplog.records if record.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert "Skipped 2" in warnings[0]
+
+
+def test_parse_rss_listing_raises_on_malformed_xml() -> None:
+    try:
+        parse_rss_listing("<rss><channel><item></rss>", ("astro-ph.GA",))
+    except ET.ParseError:
+        pass
+    else:
+        raise AssertionError("Expected malformed XML to raise ET.ParseError.")
+
+
+_MINIMAL_RSS_XML = """<rss xmlns:arxiv="http://arxiv.org/schemas/atom">
+<channel>
+<item>
+<link>https://arxiv.org/abs/2609.30001</link>
+<pubDate>Thu, 24 Sep 2026 00:00:00 -0400</pubDate>
+<category>cs.AI</category>
+<category>cs.CL</category>
+<arxiv:announce_type>new</arxiv:announce_type>
+</item>
+</channel>
+</rss>"""
+
+
+def test_load_announcement_feed_requests_rss_url_through_limiter_with_default_headers(monkeypatch) -> None:
+    import re_ass.arxiv_fetcher as arxiv_fetcher_module
+
+    sleeps: list[float] = []
+    fake_now = [0.0]
+
+    def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        fake_now[0] += seconds
+
+    monkeypatch.setattr(arxiv_fetcher_module.time, "sleep", fake_sleep)
+    monkeypatch.setattr(arxiv_fetcher_module.time, "monotonic", lambda: fake_now[0])
+
+    captured_requests = []
+
+    def fake_urlopen(request, timeout):
+        captured_requests.append(request)
+        return _FakeHtmlResponse(_MINIMAL_RSS_XML)
+
+    monkeypatch.setattr(arxiv_fetcher_module, "urlopen", fake_urlopen)
+
+    fetcher = ArxivFetcher(page_size=10, rate_limiter=ArxivRateLimiter())
+    fetcher.load_announcement_feed(("cs.AI", "cs.CL"))
+    fetcher.load_announcement_feed(("cs.AI", "cs.CL"))
+
+    assert len(captured_requests) == 2
+    request = captured_requests[0]
+    assert request.full_url == "https://rss.arxiv.org/rss/cs.AI+cs.CL"
+    assert request.get_header("Accept") is not None
+    assert request.get_header("Accept-encoding") == "gzip, deflate"
+    # A second feed load within the same fetcher pays the full crawl-delay.
+    assert sleeps == [15]
+
+
+@pytest.mark.parametrize(
+    "feed_fetcher",
+    [
+        lambda categories: (_ for _ in ()).throw(
+            HTTPError("https://rss.arxiv.org/rss/cs.AI", 406, "Not Acceptable", None, None)
+        ),
+        lambda categories: (_ for _ in ()).throw(zlib.error("bad zlib data")),
+        lambda categories: (_ for _ in ()).throw(UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")),
+        lambda categories: (_ for _ in ()).throw(http.client.IncompleteRead(b"partial", 10)),
+        lambda categories: "<rss><channel><item></rss>",
+    ],
+    ids=["http-error", "zlib-error", "unicode-decode-error", "incomplete-read", "malformed-xml"],
+)
+def test_load_announcement_feed_returns_empty_and_warns_on_source_error(feed_fetcher, caplog) -> None:
+    fetcher = ArxivFetcher(page_size=10, feed_fetcher=feed_fetcher)
+
+    with caplog.at_level("WARNING"):
+        dates = fetcher.load_announcement_feed(("cs.AI",))
+
+    assert dates == ()
+    assert any("rss.arxiv.org/rss/cs.AI" in record.getMessage() for record in caplog.records)
+
+
+def test_load_announcement_feed_returns_empty_when_feed_has_no_listed_items(caplog) -> None:
+    xml_text = """<rss xmlns:arxiv="http://arxiv.org/schemas/atom">
+<channel>
+<item>
+<link>https://arxiv.org/abs/2609.30002</link>
+<pubDate>Thu, 24 Sep 2026 00:00:00 -0400</pubDate>
+<category>cs.AI</category>
+<arxiv:announce_type>replace</arxiv:announce_type>
+</item>
+</channel>
+</rss>"""
+    fetcher = ArxivFetcher(page_size=10, feed_fetcher=lambda categories: xml_text)
+
+    with caplog.at_level("WARNING"):
+        dates = fetcher.load_announcement_feed(("cs.AI",))
+
+    assert dates == ()
+    assert any("no new or cross" in record.getMessage() for record in caplog.records)
+
+
+def test_load_recent_listings_merges_older_days_under_feed_day() -> None:
+    feed_xml = """<rss xmlns:arxiv="http://arxiv.org/schemas/atom">
+<channel>
+<item>
+<link>https://arxiv.org/abs/2609.30010</link>
+<pubDate>Thu, 24 Sep 2026 00:00:00 -0400</pubDate>
+<category>astro-ph.GA</category>
+<arxiv:announce_type>new</arxiv:announce_type>
+</item>
+</channel>
+</rss>"""
+    listing_html = _listing_html(
+        heading="Thu, 24 Sep 2026 (showing 2 of 2 entries )", ids=["2609.30010", "2609.30011"]
+    ) + _listing_html(heading="Wed, 23 Sep 2026 (showing 1 of 1 entries )", ids=["2609.30099"])
+
+    fetcher = ArxivFetcher(
+        page_size=10,
+        feed_fetcher=lambda categories: feed_xml,
+        listing_fetcher=lambda category: listing_html,
+    )
+
+    fetcher.load_announcement_feed(("astro-ph.GA",))
+    ok = fetcher.load_recent_listings(("astro-ph.GA",))
+
+    assert ok is True
+    assert fetcher._category_listing("astro-ph.GA") == {
+        date(2026, 9, 24): ["2609.30010", "2609.30011"],
+        date(2026, 9, 23): ["2609.30099"],
+    }
+
+
+def test_load_recent_listings_is_all_or_nothing_when_one_category_fails() -> None:
+    listing_html_ga = _listing_html(heading="Tue, 24 Mar 2026 (showing 1 of 1 entries )", ids=["2603.40001"])
+
+    def listing_fetcher(category):
+        if category == "astro-ph.GA":
+            return listing_html_ga
+        raise HTTPError("https://arxiv.org/list/astro-ph.CO/pastweek", 404, "Not Found", None, None)
+
+    fetcher = ArxivFetcher(page_size=10, listing_fetcher=listing_fetcher)
+
+    ok = fetcher.load_recent_listings(("astro-ph.GA", "astro-ph.CO"))
+
+    assert ok is False
+    assert fetcher._category_listing("astro-ph.GA") == {}
+
+
+def test_load_recent_listings_returns_false_on_incomplete_read(caplog) -> None:
+    def listing_fetcher(_category):
+        raise http.client.IncompleteRead(b"partial", 10)
+
+    fetcher = ArxivFetcher(page_size=10, listing_fetcher=listing_fetcher)
+
+    with caplog.at_level("WARNING"):
+        ok = fetcher.load_recent_listings(("astro-ph.GA",))
+
+    assert ok is False
+    assert any("astro-ph.GA" in record.getMessage() for record in caplog.records)
+
+
+def test_load_recent_listings_fails_when_a_category_parses_to_zero_announcement_days(caplog) -> None:
+    challenge_page_html = "<html><body>Please verify you are human.</body></html>"
+    fetcher = ArxivFetcher(page_size=10, listing_fetcher=lambda _category: challenge_page_html)
+
+    with caplog.at_level("WARNING"):
+        ok = fetcher.load_recent_listings(("astro-ph.GA",))
+
+    assert ok is False
+    assert fetcher._category_listing("astro-ph.GA") == {}
+    assert any(
+        "astro-ph.GA" in record.getMessage() and "zero announcement days" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_load_recent_listings_treats_an_unparsable_id_as_a_failure(caplog) -> None:
+    bad_listing_html = _listing_html(
+        heading="Tue, 24 Mar 2026 (showing 1 of 1 entries )", ids=["not-an-id"]
+    )
+    fetcher = ArxivFetcher(page_size=10, listing_fetcher=lambda _category: bad_listing_html)
+
+    with caplog.at_level("WARNING"):
+        ok = fetcher.load_recent_listings(("astro-ph.GA",))
+
+    assert ok is False
+    assert fetcher._category_listing("astro-ph.GA") == {}
+    assert any("astro-ph.GA" in record.getMessage() for record in caplog.records)
+
+
+def test_load_announcement_feed_seeds_ids_that_reach_collect_candidates() -> None:
+    """End-to-end through a real ArxivFetcher: RSS-parsed ids flow to collect_candidates."""
+    rss_ids = ["2609.26877", "2609.26993", "2609.27048"]
+    results_by_id = {
+        source_id: SimpleNamespace(
+            title=f"RSS Seeded Paper {source_id}",
+            summary="Seeded via the RSS feed.",
+            entry_id=f"https://arxiv.org/abs/{source_id}",
+            authors=[SimpleNamespace(name="Test Author")],
+            primary_category="astro-ph.GA",
+            categories=("astro-ph.GA",),
+            published=datetime(2026, 9, 24, 0, 0, tzinfo=timezone.utc),
+            updated=datetime(2026, 9, 24, 0, 0, tzinfo=timezone.utc),
+        )
+        for source_id in rss_ids
+    }
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.searches = []
+
+        def results(self, search: object):
+            self.searches.append(search)
+            return [results_by_id[source_id] for source_id in search.id_list]
+
+    client = FakeClient()
+    fetcher = ArxivFetcher(
+        page_size=10,
+        client=client,
+        feed_fetcher=lambda categories: _rss_fixture(),
+        rate_limiter=ArxivRateLimiter(),
+    )
+
+    feed_dates = fetcher.load_announcement_feed(("astro-ph.GA",))
+    assert feed_dates == (date(2026, 9, 24),)
+
+    papers = fetcher.collect_candidates(
+        PreferenceConfig(priorities=("Galaxies",), categories=("astro-ph.GA",)),
+        announcement_date=date(2026, 9, 24),
+    )
+
+    assert client.searches[0].id_list == rss_ids
+    assert [paper.title for paper in papers] == [f"RSS Seeded Paper {source_id}" for source_id in rss_ids]

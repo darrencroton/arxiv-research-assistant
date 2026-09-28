@@ -1,16 +1,14 @@
 """Process-wide pacing and retry policy for requests to the arxiv.org family
 of domains.
 
-arxiv.org/robots.txt declares "Crawl-delay: 15" under `User-agent: *` for
-/list, /abs, and /pdf alike. Only the announcement-day listing fetch
-(arxiv_fetcher.py's _fetch_listing_html) still hits that interactive main
-site -- see AGENTS.md's Working Notes for why: export.arxiv.org's copy of
-/list is cached for days and cannot serve "what's new" queries reliably.
-Abstract-page fallback fetches and PDF downloads go to export.arxiv.org
-instead, arXiv's site "specifically set aside for programmatic access"
-(https://info.arxiv.org/help/bulk_data.html). All of it shares one clock
-here rather than each call site keeping an independent timer that could
-still race the others inside the 15s window.
+All arxiv-host HTTP -- the `rss.arxiv.org` announcement feed, `arxiv.org/list`
+gap fill, `export.arxiv.org` abstract pages, and `export.arxiv.org` PDFs --
+shares one crawl-delay clock here rather than each call site keeping an
+independent timer that could still race the others inside the 15s window.
+The RSS feed, `/list`, and PDF downloads also retry on a transient HTTP
+status per RETRY_DELAYS_SECONDS; the abstract-page fetch makes a single
+attempt, since it is itself a fallback reached only after the primary
+metadata query has already hit a transient error.
 """
 
 from __future__ import annotations
@@ -23,24 +21,14 @@ from urllib.error import HTTPError
 CRAWL_DELAY_SECONDS = 15
 RETRY_DELAYS_SECONDS = (15, 30, 90)
 
-# Matches RETRY_DELAYS_SECONDS -- see AGENTS.md's Working Notes on the
-# 2026-09-24 406 investigation for why this is no longer a longer, dedicated
-# schedule.
-LISTING_RETRY_DELAYS_SECONDS = (15, 30, 90)
-
 # arxiv.org/robots.txt asks operators to contact arXiv in advance if an
 # application needs relaxed limits; a bare version string gives their abuse
 # tooling nothing to go on if it ever needs to tell this client apart from an
 # anonymous bot, so it carries a contact address.
 USER_AGENT = "re-ass/1.0 (+mailto:dcroton@swin.edu.au)"
 
-# Plain urllib.request.Request sends no Accept header and an Accept-Encoding
-# of "identity" (a value real browsers essentially never send -- see
-# AGENTS.md's Working Notes on the 2026-09-24 406 investigation). Both are
-# unusual enough to plausibly read as bot-like to arXiv's front end, so the
-# listing and abstract-page fetches instead advertise a realistic browser-like
-# profile. decode_html_response() below handles the gzip/deflate content this
-# now invites.
+# Accept/Accept-Language/Accept-Encoding for text responses; decode_response_text()
+# un-gzips or inflates the compressed bodies this invites.
 DEFAULT_HEADERS = {
     "User-Agent": USER_AGENT,
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -65,9 +53,9 @@ def _decompress(body: bytes, content_encoding: str) -> bytes:
     return body
 
 
-def decode_html_response(response) -> str:
-    """Read and decode an HTML response body, transparently un-gzipping or
-    -inflating it if the server honored DEFAULT_HEADERS' Accept-Encoding."""
+def decode_response_text(response) -> str:
+    """Read and decode an HTML or XML text body, un-gzipping or inflating it
+    when Content-Encoding says so."""
     body = _decompress(response.read(), response.headers.get("Content-Encoding"))
     return body.decode("utf-8")
 
@@ -76,9 +64,8 @@ _ERROR_BODY_SNIPPET_BYTES = 2048
 
 
 def describe_http_error(exc: HTTPError) -> str:
-    """Best-effort summary of an HTTPError's Retry-After header and response
-    body, so a 406 (or other transient status) leaves behind arXiv's own
-    explanation in the logs instead of just a bare status code."""
+    """Best-effort summary of an HTTPError's Retry-After header and body
+    snippet, for diagnosing a transient status."""
     parts = []
     headers = getattr(exc, "headers", None)
     retry_after = headers.get("Retry-After") if headers is not None else None
@@ -104,7 +91,7 @@ def describe_http_error(exc: HTTPError) -> str:
 
 
 class ArxivRateLimiter:
-    """Enforces a minimum gap between requests to arxiv.org."""
+    """Enforces a minimum gap between requests to the arxiv.org family of hosts."""
 
     def __init__(self) -> None:
         self._last_request_at: float | None = None

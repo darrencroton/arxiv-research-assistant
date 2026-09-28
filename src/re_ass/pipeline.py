@@ -174,6 +174,9 @@ def _run_summary_base(invocation_date: date, llm_stamp: dict[str, object] | None
         "note_date": None,
         "available_announcement_dates": [],
         "pending_announcement_dates": [],
+        "feed_announcement_dates": [],
+        "listing_gap_dates": [],
+        "listing_gap_fallback": None,
         "visible_window_start": None,
         "visible_window_end": None,
         "candidate_count": 0,
@@ -247,6 +250,53 @@ def _next_weekday(day: date) -> date:
     while candidate.weekday() >= 5:
         candidate += timedelta(days=1)
     return candidate
+
+
+def _listing_gap_dates(
+    feed_dates: tuple[date, ...],
+    *,
+    last_completed_announcement_date: date | None,
+    backfill_date: date | None,
+) -> list[date]:
+    """Weekday announcement days a usable RSS feed alone would silently miss.
+
+    Backfill: the requested date, unless the feed already carries it. Standard
+    run: every weekday strictly between the completed marker and the latest
+    feed date that the feed itself doesn't list; empty on a first run (no
+    marker yet) or once the marker has caught up to the feed.
+    """
+    if backfill_date is not None:
+        return [] if backfill_date in feed_dates else [backfill_date]
+
+    if last_completed_announcement_date is None or not feed_dates:
+        return []
+
+    latest_feed_date = max(feed_dates)
+    gap_dates: list[date] = []
+    candidate = last_completed_announcement_date
+    while True:
+        candidate = _next_weekday(candidate)
+        if candidate >= latest_feed_date:
+            break
+        if candidate not in feed_dates:
+            gap_dates.append(candidate)
+    return gap_dates
+
+
+def _warn_unfilled_listing_gap(gap_dates: list[date]) -> None:
+    commands = "\n".join(f"  uv run re-ass --date {day.isoformat()}" for day in gap_dates)
+    LOGGER.warning(
+        "Announcement day(s) %s to %s were not covered by the arXiv RSS feed and the "
+        "recent-listing fallback failed; continuing with the current feed day. The "
+        "completed-announcement marker will advance past these dates, so they will not be "
+        "retried automatically. Only days still visible in arXiv's recent listing can be "
+        "recovered. To recover a day, run:\n%s\n"
+        "Each backfill writes that announcement day into the daily note of the same date "
+        "(no next-weekday shift) and leaves the weekly note untouched.",
+        gap_dates[0].isoformat(),
+        gap_dates[-1].isoformat(),
+        commands,
+    )
 
 
 def _note_dates_for_pending(invocation_date: date, announcement_dates: list[date]) -> dict[date, date]:
@@ -376,6 +426,7 @@ def _run_announcement_day(
     generation_service: GenerationService,
     fetcher: ArxivFetcher,
     backfill: bool,
+    listing_summary: dict[str, object],
 ) -> int:
     run_summary = _run_summary_base(invocation_date, _llm_stamp(config))
     _populate_run_summary_dates(
@@ -385,6 +436,7 @@ def _run_announcement_day(
         announcement_date=announcement_date,
         note_date=note_date,
     )
+    run_summary.update(listing_summary)
 
     try:
         candidates = fetcher.collect_candidates(
@@ -517,8 +569,15 @@ def _run_announcement_day(
 
         run_summary["completed_papers"] = len(successful_papers)
         run_summary["failed_papers"] = len(run_summary["failed_keys"])
+        # Never move the marker backwards: a --date backfill can target a day
+        # older than standard runs have already completed, and the next
+        # scheduled run would then reprocess an already-finished day. Read it
+        # before saving the run summary, which the marker falls back to when
+        # no checkpoint file exists yet.
+        current_marker = state_store.load_completed_announcement_date()
         state_store.save_run_summary(run_summary, label=f"announcement-{announcement_date.isoformat()}")
-        state_store.save_completed_announcement_date(announcement_date)
+        if current_marker is None or announcement_date > current_marker:
+            state_store.save_completed_announcement_date(announcement_date)
         return 0
     except RankingError as error:
         LOGGER.error(
@@ -562,14 +621,44 @@ def run(config: AppConfig, run_date: date | None = None, *, backfill: bool = Fal
             prompt_logger=prompt_logger,
         )
         fetcher = ArxivFetcher(page_size=config.arxiv_page_size)
+
+        last_completed_announcement_date = state_store.load_completed_announcement_date()
+        feed_dates = fetcher.load_announcement_feed(preferences.categories)
+        backfill_date = invocation_date if backfill else None
+        gap_dates = _listing_gap_dates(
+            feed_dates,
+            last_completed_announcement_date=last_completed_announcement_date,
+            backfill_date=backfill_date,
+        )
+
+        # RSS alone can't answer a gap or a wholly unusable feed; /list is the
+        # gap-fill path for both. Otherwise the feed day is enough on its own.
+        gap_fallback_ran = bool(gap_dates) or not feed_dates
+        gap_fallback_filled = fetcher.load_recent_listings(preferences.categories) if gap_fallback_ran else None
+
         available_dates = list(fetcher.available_announcement_dates(preferences.categories))
+        if not backfill and not available_dates:
+            raise RuntimeError(
+                f"No announcement listing available: the arXiv RSS feed for {', '.join(preferences.categories)} "
+                "was unusable and the recent-listing fallback failed."
+            )
+
+        gap_unfilled = bool(gap_dates) and gap_fallback_filled is False and not backfill
+
+        listing_summary: dict[str, object] = {
+            "feed_announcement_dates": [day.isoformat() for day in feed_dates],
+            "listing_gap_dates": [day.isoformat() for day in gap_dates],
+            "listing_gap_fallback": (
+                "not_needed" if gap_fallback_filled is None else ("filled" if gap_fallback_filled else "failed")
+            ),
+        }
+        overall_summary.update(listing_summary)
 
         if backfill:
             pending_dates = [invocation_date]
             note_date_map = {invocation_date: invocation_date}
             ready_dates = pending_dates
         else:
-            last_completed_announcement_date = state_store.load_completed_announcement_date()
             pending_dates = _pending_announcement_dates(
                 available_dates,
                 last_completed_announcement_date=last_completed_announcement_date,
@@ -594,6 +683,12 @@ def run(config: AppConfig, run_date: date | None = None, *, backfill: bool = Fal
         )
 
         if backfill and invocation_date not in available_dates:
+            if listing_summary["listing_gap_fallback"] == "failed":
+                raise ValueError(
+                    f"Announcement date {invocation_date.isoformat()} could not be backfilled: the "
+                    "recent-listing fetch failed. Retry this backfill later once arXiv's recent-listing "
+                    "page is reachable again."
+                )
             raise ValueError(
                 f"Announcement date {invocation_date.isoformat()} is not visible in the current arXiv recent window."
             )
@@ -603,9 +698,20 @@ def run(config: AppConfig, run_date: date | None = None, *, backfill: bool = Fal
             state_store.save_run_summary(overall_summary, label="overall")
             return 0
         if not ready_dates:
+            if gap_unfilled:
+                # Nothing is processed, so the marker stays put and the next
+                # run retries the gap fill; only warn that it is still pending.
+                LOGGER.warning(
+                    "Recent-listing fallback failed for missed announcement day(s) %s to %s; no feed day is "
+                    "ready to process yet, so they stay pending and the next run will retry the gap fill.",
+                    gap_dates[0].isoformat(),
+                    gap_dates[-1].isoformat(),
+                )
             LOGGER.info("No pending announcement day maps to a note date on or before %s.", invocation_date.isoformat())
             state_store.save_run_summary(overall_summary, label="overall")
             return 0
+        if gap_unfilled:
+            _warn_unfilled_listing_gap(gap_dates)
 
         dates_to_process = ready_dates
         for announcement_date in dates_to_process:
@@ -623,6 +729,7 @@ def run(config: AppConfig, run_date: date | None = None, *, backfill: bool = Fal
                 generation_service=generation_service,
                 fetcher=fetcher,
                 backfill=backfill,
+                listing_summary=listing_summary,
             )
             if exit_code != 0:
                 return exit_code

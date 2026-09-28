@@ -153,7 +153,7 @@ uv run re-ass
 
 This should:
 
-- discover unprocessed arXiv announcement days from the recent category listings
+- discover the current arXiv announcement day from the RSS feed, filling missed days from the recent category listing pages when needed
 - fetch that day's candidates across all configured categories, then rank them as one combined pool
 - rank and summarise the selected papers
 - write or update the daily note ending at today, with catch-up days filling earlier note dates if needed
@@ -193,10 +193,11 @@ user_preferences/
 
 Automatic runs are driven by arXiv announcement days, not by a rolling timestamp cursor:
 
-- each configured category is discovered separately from its recent arXiv listing
+- the current announcement day is discovered from arXiv's RSS feed, one request for all configured categories; the recent category listing pages are used only to fill a gap the feed doesn't cover
 - cross-listed papers are deduplicated by arXiv ID
 - all candidates for an announcement day are ranked together in one pass
 - if `re-ass` was down, the next run can catch up on the visible missed announcement days in order
+- if the recent listing can't be fetched to fill a gap, `re-ass` logs a warning naming the missed day(s) and the `uv run re-ass --date ...` command to recover each one, then continues with the current announcement day
 - by default, `notes.shift_announcements_to_next_weekday = true` writes each arXiv announcement day into the next local weekday note, so a Friday announcement lands in Monday's note
 - if that setting is `false`, automatic catch-up fills weekday daily notes backwards from the run date, skipping weekends
 - announcements whose shifted note date is still in the future are left pending for a later run

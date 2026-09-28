@@ -1,24 +1,29 @@
-"""arXiv paper fetching and announcement-day candidate collection for re-ass."""
+"""arXiv announcement listings (RSS feed, with the recent-listing page as gap
+fill) and per-paper metadata collection for re-ass."""
 
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from email.utils import parsedate_to_datetime
 from html import unescape
 from html.parser import HTMLParser
+import http.client
 import logging
 import time
 from typing import Any
 import re
-from urllib.error import HTTPError
+import xml.etree.ElementTree as ET
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+import zlib
 
 import arxiv
 
 from re_ass.arxiv_rate_limit import (
     DEFAULT_HEADERS,
     ArxivRateLimiter,
-    LISTING_RETRY_DELAYS_SECONDS,
-    decode_html_response,
+    RETRY_DELAYS_SECONDS,
+    decode_response_text,
     describe_http_error,
     get_shared_limiter,
     is_transient_http_status,
@@ -31,8 +36,87 @@ LOGGER = logging.getLogger(__name__)
 _ANNOUNCEMENT_HEADING_RE = re.compile(r"^(?P<label>[A-Za-z]{3}, \d{1,2} [A-Za-z]{3} \d{4})")
 _CATEGORY_CODE_RE = re.compile(r"\((?P<code>[A-Za-z0-9.-]+)\)")
 _RECENT_PAGE_SIZE = 2000
+_RSS_ARXIV_NS = "{http://arxiv.org/schemas/atom}"
+_RSS_LISTED_ANNOUNCE_TYPES = frozenset({"new", "cross"})
 _SUBMITTED_DATE_RE = re.compile(r"\[Submitted on (?P<label>\d{1,2} [A-Za-z]{3} \d{4})")
 _WHITESPACE_RE = re.compile(r"\s+")
+
+# What self._fetch_text (urlopen + decode_response_text) can raise: HTTPError is a
+# URLError/OSError subclass so it's covered; TimeoutError/socket errors and
+# gzip.BadGzipFile are OSError subclasses; UnicodeDecodeError is a ValueError
+# subclass; zlib.error is the one decompression error outside that hierarchy;
+# http.client.HTTPException (IncompleteRead, BadStatusLine, ...) is raised by
+# the underlying http.client machinery on a malformed/truncated response and
+# is not an OSError subclass, so it's listed explicitly.
+_ARXIV_SOURCE_ERRORS = (URLError, OSError, ValueError, zlib.error, http.client.HTTPException)
+
+
+def _rss_feed_url(categories: tuple[str, ...]) -> str:
+    return f"https://rss.arxiv.org/rss/{'+'.join(categories)}"
+
+
+def _recent_listing_url(category: str) -> str:
+    return f"https://arxiv.org/list/{category}/pastweek?show={_RECENT_PAGE_SIZE}"
+
+
+def parse_rss_listing(xml_text: str, categories: tuple[str, ...]) -> dict[str, dict[date, list[str]]]:
+    """Per-category announcement listing from an arXiv RSS feed (new and cross items only).
+
+    Raises xml.etree.ElementTree.ParseError on malformed XML.
+    Returns an entry for every requested category, empty when the feed lists nothing for it.
+    """
+    requested = set(categories)
+    listings: dict[str, dict[date, list[str]]] = {category: {} for category in categories}
+    seen_ids: dict[str, dict[date, set[str]]] = {category: {} for category in categories}
+    skipped_count = 0
+
+    root = ET.fromstring(xml_text)
+    for item in root.iterfind("./channel/item"):
+        announce_type = (item.findtext(f"{_RSS_ARXIV_NS}announce_type") or "").strip()
+        if announce_type not in _RSS_LISTED_ANNOUNCE_TYPES:
+            continue
+
+        link = (item.findtext("link") or "").strip()
+        pub_date = (item.findtext("pubDate") or "").strip()
+        if not link or not pub_date:
+            skipped_count += 1
+            continue
+        try:
+            source_id = extract_source_id(link)
+            announcement_date = parsedate_to_datetime(pub_date).date()
+        except ValueError:
+            skipped_count += 1
+            continue
+
+        for category_element in item.findall("category"):
+            category = (category_element.text or "").strip()
+            if category not in requested:
+                continue
+            day_seen = seen_ids[category].setdefault(announcement_date, set())
+            if source_id in day_seen:
+                continue
+            listings[category].setdefault(announcement_date, []).append(source_id)
+            day_seen.add(source_id)
+
+    if skipped_count:
+        LOGGER.warning(
+            "Skipped %d new/cross RSS item(s) with a missing or unparsable link or pubDate.",
+            skipped_count,
+        )
+    return listings
+
+
+def _merge_listing(base: dict[date, list[str]], extra: dict[date, list[str]]) -> dict[date, list[str]]:
+    """Union two per-date id listings: base order first, extra ids appended if unseen."""
+    merged = {day: list(ids) for day, ids in base.items()}
+    for day, ids in extra.items():
+        existing = merged.setdefault(day, [])
+        seen = set(existing)
+        for source_id in ids:
+            if source_id not in seen:
+                existing.append(source_id)
+                seen.add(source_id)
+    return merged
 
 
 def _ensure_utc(value: datetime) -> datetime:
@@ -275,47 +359,57 @@ class ArxivFetcher:
         client: arxiv.Client | None = None,
         listing_fetcher: Any | None = None,
         abstract_fetcher: Any | None = None,
+        feed_fetcher: Any | None = None,
         rate_limiter: ArxivRateLimiter | None = None,
     ) -> None:
         self.page_size = max(1, min(page_size, 100))
         self.client = client or arxiv.Client(page_size=self.page_size, num_retries=3, delay_seconds=3)
         self._listing_fetcher = listing_fetcher or self._fetch_listing_html
         self._abstract_fetcher = abstract_fetcher or self._fetch_abstract_html
+        self._feed_fetcher = feed_fetcher or self._fetch_rss_xml
         self._listing_cache: dict[str, dict[date, list[str]]] = {}
         self._rate_limiter = rate_limiter or get_shared_limiter()
+
+    def _fetch_text(self, url: str, *, label: str) -> str:
+        """Shared retry loop for arXiv HTML/XML GETs.
+
+        Waits on the shared crawl-delay limiter, sends DEFAULT_HEADERS, and
+        decodes the response body. On a transient HTTP status it logs a
+        WARNING and sleeps per RETRY_DELAYS_SECONDS; the HTTPError is
+        re-raised once that schedule is exhausted or immediately for a
+        non-transient status. Severity of the eventual failure is the
+        caller's call, not logged here.
+        """
+        request = Request(url, headers=dict(DEFAULT_HEADERS))
+        delays = list(RETRY_DELAYS_SECONDS)
+        for attempt, delay in enumerate(delays + [None], start=1):
+            self._rate_limiter.wait_for_crawl_delay()
+            try:
+                with urlopen(request, timeout=60) as response:
+                    text = decode_response_text(response)
+            except HTTPError as exc:
+                self._rate_limiter.mark_request_completed()
+                detail = describe_http_error(exc)
+                if not is_transient_http_status(exc.code) or delay is None:
+                    raise
+                LOGGER.warning(
+                    "arXiv fetch of %s returned HTTP %s (attempt %d/%d); retrying in %ds. %s",
+                    label, exc.code, attempt, len(delays) + 1, delay, detail,
+                )
+                time.sleep(delay)
+            else:
+                self._rate_limiter.mark_request_completed()
+                return text
+        raise RuntimeError("unreachable")
 
     def _fetch_listing_html(self, category: str) -> str:
         # export.arxiv.org's copy of this page lags by days (see AGENTS.md),
         # so it cannot serve a "what's new" query. This is the one call site
         # that must stay on the interactive main site.
-        url = f"https://arxiv.org/list/{category}/pastweek?show={_RECENT_PAGE_SIZE}"
-        request = Request(url, headers=dict(DEFAULT_HEADERS))
-        delays = list(LISTING_RETRY_DELAYS_SECONDS)
-        for attempt, delay in enumerate(delays + [None], start=1):
-            self._rate_limiter.wait_for_crawl_delay()
-            try:
-                with urlopen(request, timeout=60) as response:
-                    html = decode_html_response(response)
-            except HTTPError as exc:
-                self._rate_limiter.mark_request_completed()
-                detail = describe_http_error(exc)
-                if not is_transient_http_status(exc.code) or delay is None:
-                    LOGGER.error(
-                        "arXiv listing fetch failed for %s after %d attempt(s) with HTTP %s: %s. "
-                        "A normal scheduled run will retry this automatically; an explicit --date "
-                        "backfill will need to be re-run by hand once the day is fetchable again.",
-                        category, attempt, exc.code, detail,
-                    )
-                    raise
-                LOGGER.warning(
-                    "arXiv listing fetch returned HTTP %s for %s (attempt %d/%d); retrying in %ds. %s",
-                    exc.code, category, attempt, len(delays) + 1, delay, detail,
-                )
-                time.sleep(delay)
-            else:
-                self._rate_limiter.mark_request_completed()
-                return html
-        raise RuntimeError("unreachable")
+        return self._fetch_text(_recent_listing_url(category), label=f"recent listing for {category}")
+
+    def _fetch_rss_xml(self, categories: tuple[str, ...]) -> str:
+        return self._fetch_text(_rss_feed_url(categories), label=f"announcement feed for {'+'.join(categories)}")
 
     def _fetch_abstract_html(self, source_id: str) -> str:
         # export.arxiv.org mirrors individual /abs pages promptly, unlike the
@@ -326,20 +420,74 @@ class ArxivFetcher:
         self._rate_limiter.wait_for_crawl_delay()
         try:
             with urlopen(request, timeout=60) as response:
-                return decode_html_response(response)
+                return decode_response_text(response)
         finally:
             self._rate_limiter.mark_request_completed()
 
     def _category_listing(self, category: str) -> dict[date, list[str]]:
-        cached = self._listing_cache.get(category)
-        if cached is not None:
-            return cached
+        return self._listing_cache.get(category, {})
 
-        parser = _AnnouncementListingParser()
-        parser.feed(self._listing_fetcher(category))
-        listing = {day: list(ids) for day, ids in parser.day_to_ids.items()}
-        self._listing_cache[category] = listing
-        return listing
+    def load_announcement_feed(self, categories: tuple[str, ...]) -> tuple[date, ...]:
+        """Fetch the RSS feed once for all categories and seed the listing cache.
+
+        Returns the announcement dates the feed lists, or () when the feed is
+        unusable (HTTP/network error, malformed XML, or no new/cross items);
+        each unusable case is logged at WARNING with the feed URL. Never
+        raises for feed problems.
+        """
+        feed_url = _rss_feed_url(categories)
+        try:
+            xml_text = self._feed_fetcher(categories)
+            listing = parse_rss_listing(xml_text, categories)
+        except _ARXIV_SOURCE_ERRORS as error:
+            LOGGER.warning("arXiv announcement feed %s was unusable: %s", feed_url, error)
+            return ()
+        except ET.ParseError as error:
+            LOGGER.warning("arXiv announcement feed %s returned malformed XML: %s", feed_url, error)
+            return ()
+
+        dates: set[date] = set()
+        for category, day_to_ids in listing.items():
+            self._listing_cache[category] = _merge_listing(self._listing_cache.get(category, {}), day_to_ids)
+            dates.update(day_to_ids)
+
+        if not dates:
+            LOGGER.warning("arXiv announcement feed %s listed no new or cross items.", feed_url)
+            return ()
+        return tuple(sorted(dates))
+
+    def load_recent_listings(self, categories: tuple[str, ...]) -> bool:
+        """Fetch /list/{category}/pastweek for every category and merge it into the cache.
+
+        All-or-nothing across categories: if any category fails after
+        retries, parses to zero announcement days (e.g. a challenge page or a
+        layout change), or contains an id the parser can't make sense of,
+        nothing is merged and False is returned (the failure is logged at
+        WARNING with category and URL). Otherwise True.
+        """
+        fetched: dict[str, dict[date, list[str]]] = {}
+        for category in categories:
+            url = _recent_listing_url(category)
+            try:
+                html = self._listing_fetcher(category)
+                parser = _AnnouncementListingParser()
+                parser.feed(html)
+                listing = {day: list(ids) for day, ids in parser.day_to_ids.items()}
+            except _ARXIV_SOURCE_ERRORS as error:
+                LOGGER.warning("Recent-listing fallback failed for %s (%s): %s", category, url, error)
+                return False
+            if not listing:
+                LOGGER.warning(
+                    "Recent-listing fallback for %s (%s) parsed zero announcement days; treating as a failure.",
+                    category,
+                    url,
+                )
+                return False
+            fetched[category] = listing
+
+        for category, listing in fetched.items():
+            self._listing_cache[category] = _merge_listing(self._listing_cache.get(category, {}), listing)
+        return True
 
     def available_announcement_dates(self, categories: tuple[str, ...]) -> tuple[date, ...]:
         dates: set[date] = set()
