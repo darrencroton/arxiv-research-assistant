@@ -166,7 +166,7 @@ Backfill a specific day:
 uv run re-ass --date 2026-03-21
 ```
 
-An explicit `--date` backfill processes that announcement day directly without rotating the current weekly note.
+An explicit `--date` backfill processes that announcement day directly without rotating the current weekly note. The day must be in a saved listing snapshot or still visible in arXiv's recent listing (roughly the past five announcement days).
 
 ## Directory Layout
 
@@ -179,6 +179,7 @@ output/
 state/
   papers/         per-paper completion records
   runs/           per-run diagnostics
+  listings/       per-day arXiv listing snapshots (never refetched once saved)
 logs/
   history.log
   last-run.log
@@ -193,7 +194,8 @@ user_preferences/
 
 Automatic runs are driven by arXiv announcement days, not by a rolling timestamp cursor:
 
-- the current announcement day is discovered from arXiv's RSS feed, one request for all configured categories; the recent category listing pages are used only to fill a gap the feed doesn't cover
+- the current announcement day is discovered from arXiv's RSS feed, one request for all configured categories; the recent category listing pages (tried on `export.arxiv.org` first, then `arxiv.org`) are used only to fill a gap the feed doesn't cover
+- every announcement day's listing is saved under `state/listings/`, so a day the feed has rolled past (for example after a failed run, once a first run has completed) can still be processed later, and `--date` for a saved day needs no recent-listing request
 - cross-listed papers are deduplicated by arXiv ID
 - all candidates for an announcement day are ranked together in one pass
 - if `re-ass` was down, the next run can catch up on the visible missed announcement days in order

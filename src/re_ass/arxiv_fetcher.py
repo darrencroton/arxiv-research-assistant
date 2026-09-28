@@ -36,6 +36,9 @@ LOGGER = logging.getLogger(__name__)
 _ANNOUNCEMENT_HEADING_RE = re.compile(r"^(?P<label>[A-Za-z]{3}, \d{1,2} [A-Za-z]{3} \d{4})")
 _CATEGORY_CODE_RE = re.compile(r"\((?P<code>[A-Za-z0-9.-]+)\)")
 _RECENT_PAGE_SIZE = 2000
+# export.arxiv.org is arXiv's programmatic-access host and has not shown the main site's 406
+# windows, but its copy can lag for the newest day (hence the staleness check); arxiv.org is the fallback.
+_RECENT_LISTING_HOSTS = ("export.arxiv.org", "arxiv.org")
 _RSS_ARXIV_NS = "{http://arxiv.org/schemas/atom}"
 _RSS_LISTED_ANNOUNCE_TYPES = frozenset({"new", "cross"})
 _SUBMITTED_DATE_RE = re.compile(r"\[Submitted on (?P<label>\d{1,2} [A-Za-z]{3} \d{4})")
@@ -55,8 +58,8 @@ def _rss_feed_url(categories: tuple[str, ...]) -> str:
     return f"https://rss.arxiv.org/rss/{'+'.join(categories)}"
 
 
-def _recent_listing_url(category: str) -> str:
-    return f"https://arxiv.org/list/{category}/pastweek?show={_RECENT_PAGE_SIZE}"
+def _recent_listing_url(category: str, host: str) -> str:
+    return f"https://{host}/list/{category}/pastweek?show={_RECENT_PAGE_SIZE}"
 
 
 def parse_rss_listing(xml_text: str, categories: tuple[str, ...]) -> dict[str, dict[date, list[str]]]:
@@ -402,19 +405,17 @@ class ArxivFetcher:
                 return text
         raise RuntimeError("unreachable")
 
-    def _fetch_listing_html(self, category: str) -> str:
-        # export.arxiv.org's copy of this page lags by days (see AGENTS.md),
-        # so it cannot serve a "what's new" query. This is the one call site
-        # that must stay on the interactive main site.
-        return self._fetch_text(_recent_listing_url(category), label=f"recent listing for {category}")
+    def _fetch_listing_html(self, category: str, host: str) -> str:
+        return self._fetch_text(
+            _recent_listing_url(category, host), label=f"recent listing for {category} from {host}"
+        )
 
     def _fetch_rss_xml(self, categories: tuple[str, ...]) -> str:
         return self._fetch_text(_rss_feed_url(categories), label=f"announcement feed for {'+'.join(categories)}")
 
     def _fetch_abstract_html(self, source_id: str) -> str:
-        # export.arxiv.org mirrors individual /abs pages promptly, unlike the
-        # /list page above, and is arXiv's site "specifically set aside for
-        # programmatic access" (see AGENTS.md).
+        # export.arxiv.org mirrors individual /abs pages promptly and is arXiv's site
+        # "specifically set aside for programmatic access" (see AGENTS.md).
         url = f"https://export.arxiv.org/abs/{source_id}"
         request = Request(url, headers=dict(DEFAULT_HEADERS))
         self._rate_limiter.wait_for_crawl_delay()
@@ -456,38 +457,79 @@ class ArxivFetcher:
             return ()
         return tuple(sorted(dates))
 
-    def load_recent_listings(self, categories: tuple[str, ...]) -> bool:
-        """Fetch /list/{category}/pastweek for every category and merge it into the cache.
+    def seed_listings(self, listings: dict[str, dict[date, list[str]]]) -> None:
+        """Merge previously saved per-category listings (snapshots) into the cache."""
+        for category, day_to_ids in listings.items():
+            self._listing_cache[category] = _merge_listing(self._listing_cache.get(category, {}), day_to_ids)
 
-        All-or-nothing across categories: if any category fails after
-        retries, parses to zero announcement days (e.g. a challenge page or a
-        layout change), or contains an id the parser can't make sense of,
-        nothing is merged and False is returned (the failure is logged at
-        WARNING with category and URL). Otherwise True.
+    def listing_for_day(self, categories: tuple[str, ...], announcement_date: date) -> dict[str, list[str]]:
+        """Cached ids per category for one announcement day; [] for a category that listed nothing."""
+        return {
+            category: list(self._category_listing(category).get(announcement_date, []))
+            for category in categories
+        }
+
+    def _fetch_recent_listing(
+        self, category: str, required_dates: tuple[date, ...]
+    ) -> dict[date, list[str]] | None:
+        """First acceptable /list page for one category across the hosts, or None.
+
+        A page is acceptable when it fetches, parses to at least one
+        announcement day, and (given required_dates) its newest day is not
+        older than the newest date needed, i.e. the mirror is not stale. The
+        test is the newest listed day rather than presence of a needed day
+        because a category can legitimately have no papers on a day.
         """
-        fetched: dict[str, dict[date, list[str]]] = {}
-        for category in categories:
-            url = _recent_listing_url(category)
+        for host in _RECENT_LISTING_HOSTS:
+            url = _recent_listing_url(category, host)
             try:
-                html = self._listing_fetcher(category)
                 parser = _AnnouncementListingParser()
-                parser.feed(html)
+                parser.feed(self._listing_fetcher(category, host))
                 listing = {day: list(ids) for day, ids in parser.day_to_ids.items()}
             except _ARXIV_SOURCE_ERRORS as error:
                 LOGGER.warning("Recent-listing fallback failed for %s (%s): %s", category, url, error)
-                return False
+                continue
             if not listing:
                 LOGGER.warning(
                     "Recent-listing fallback for %s (%s) parsed zero announcement days; treating as a failure.",
                     category,
                     url,
                 )
-                return False
+                continue
+            if required_dates and max(listing) < max(required_dates):
+                LOGGER.warning(
+                    "Recent-listing fallback for %s (%s) is stale: newest day shown is %s but %s is needed.",
+                    category,
+                    url,
+                    max(listing).isoformat(),
+                    max(required_dates).isoformat(),
+                )
+                continue
+            return listing
+        return None
+
+    def load_recent_listings(
+        self, categories: tuple[str, ...], required_dates: tuple[date, ...] = ()
+    ) -> tuple[date, ...]:
+        """Fetch /list/{category}/pastweek for every category and merge it into the cache.
+
+        Each category tries export.arxiv.org then arxiv.org (see
+        _fetch_recent_listing; required_dates are the days the caller needs,
+        empty when none are known). Returns the sorted announcement days the
+        accepted pages showed, so the caller can tell which days the window
+        covered. All-or-nothing across categories: if any category has no
+        acceptable host, nothing is merged and () is returned (each rejected
+        host is logged at WARNING with category and URL).
+        """
+        fetched: dict[str, dict[date, list[str]]] = {}
+        for category in categories:
+            listing = self._fetch_recent_listing(category, required_dates)
+            if listing is None:
+                return ()
             fetched[category] = listing
 
-        for category, listing in fetched.items():
-            self._listing_cache[category] = _merge_listing(self._listing_cache.get(category, {}), listing)
-        return True
+        self.seed_listings(fetched)
+        return tuple(sorted({day for listing in fetched.values() for day in listing}))
 
     def available_announcement_dates(self, categories: tuple[str, ...]) -> tuple[date, ...]:
         dates: set[date] = set()

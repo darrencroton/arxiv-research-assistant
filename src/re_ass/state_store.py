@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
 from re_ass.settings import AppConfig
 
+
+LOGGER = logging.getLogger(__name__)
 
 PAPER_STATUSES = (
     "selected",
@@ -42,12 +45,14 @@ class StateStore:
         self.state_root = config.state_root
         self.papers_dir = config.state_papers_dir
         self.runs_dir = config.state_runs_dir
+        self.listings_dir = self.state_root / "listings"
         self.announcement_checkpoint_path = self.state_root / "announcement-checkpoint.json"
 
     def bootstrap(self) -> None:
         self.state_root.mkdir(parents=True, exist_ok=True)
         self.papers_dir.mkdir(parents=True, exist_ok=True)
         self.runs_dir.mkdir(parents=True, exist_ok=True)
+        self.listings_dir.mkdir(parents=True, exist_ok=True)
 
     def paper_record_path(self, paper_key: str) -> Path:
         return self.papers_dir / _paper_record_filename(paper_key)
@@ -135,6 +140,66 @@ class StateStore:
         }
         _write_json(self.announcement_checkpoint_path, payload)
         return self.announcement_checkpoint_path
+
+    def save_listing_snapshot(
+        self,
+        announcement_date: date,
+        categories_to_ids: dict[str, list[str]],
+        *,
+        source: str,
+    ) -> Path | None:
+        """Record which arXiv ids each category listed on an announcement day.
+
+        Write-once: snapshots are immutable audit records, so an existing file
+        is left untouched (the first source wins) and None is returned. A
+        category with no papers that day must appear with an empty list so
+        the snapshot can be judged complete later.
+        """
+        path = self.listings_dir / f"{announcement_date.isoformat()}.json"
+        if path.exists():
+            return None
+        payload = {
+            "announcement_date": announcement_date.isoformat(),
+            "source": source,
+            "saved_at": _now_iso(),
+            "categories": {category: list(ids) for category, ids in categories_to_ids.items()},
+        }
+        _write_json(path, payload)
+        return path
+
+    def load_listing_snapshot(
+        self, announcement_date: date, categories: tuple[str, ...]
+    ) -> dict[str, list[str]] | None:
+        """Saved category-to-ids listing for one announcement day, or None.
+
+        None when there is no snapshot, when it is unreadable or malformed
+        (WARNING naming the path), or when it lacks any requested category
+        (INFO): one saved before a category was configured is incomplete for
+        the current config, so that day is refetched instead.
+        """
+        path = self.listings_dir / f"{announcement_date.isoformat()}.json"
+        if not path.exists():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if date.fromisoformat(payload["announcement_date"]) != announcement_date:
+                raise ValueError(f"announcement_date {payload['announcement_date']} does not match the filename")
+            snapshot = {
+                category: [str(source_id) for source_id in ids]
+                for category, ids in payload["categories"].items()
+            }
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+            LOGGER.warning("Skipping unreadable listing snapshot %s: %s", path, error)
+            return None
+        missing = [category for category in categories if category not in snapshot]
+        if missing:
+            LOGGER.info(
+                "Ignoring listing snapshot %s: it does not cover configured categories %s.",
+                path,
+                ", ".join(missing),
+            )
+            return None
+        return {category: snapshot[category] for category in categories}
 
     def save_paper_record(
         self,

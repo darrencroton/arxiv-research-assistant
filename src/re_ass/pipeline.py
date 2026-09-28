@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from datetime import date, timedelta
 import logging
 from pathlib import Path
@@ -175,6 +176,7 @@ def _run_summary_base(invocation_date: date, llm_stamp: dict[str, object] | None
         "available_announcement_dates": [],
         "pending_announcement_dates": [],
         "feed_announcement_dates": [],
+        "snapshot_announcement_dates": [],
         "listing_gap_dates": [],
         "listing_gap_fallback": None,
         "visible_window_start": None,
@@ -253,41 +255,104 @@ def _next_weekday(day: date) -> date:
 
 
 def _listing_gap_dates(
-    feed_dates: tuple[date, ...],
+    listed_dates: Collection[date],
     *,
     last_completed_announcement_date: date | None,
     backfill_date: date | None,
 ) -> list[date]:
-    """Weekday announcement days a usable RSS feed alone would silently miss.
+    """Weekday announcement days that no known listing (feed or snapshot) covers.
 
-    Backfill: the requested date, unless the feed already carries it. Standard
-    run: every weekday strictly between the completed marker and the latest
-    feed date that the feed itself doesn't list; empty on a first run (no
-    marker yet) or once the marker has caught up to the feed.
+    Backfill: the requested date, unless it is already listed. Standard run:
+    every weekday strictly between the completed marker and the latest listed
+    date that isn't itself listed; empty on a first run (no marker yet) or
+    once the marker has caught up to the latest listed date.
     """
     if backfill_date is not None:
-        return [] if backfill_date in feed_dates else [backfill_date]
+        return [] if backfill_date in listed_dates else [backfill_date]
 
-    if last_completed_announcement_date is None or not feed_dates:
+    if last_completed_announcement_date is None or not listed_dates:
         return []
 
-    latest_feed_date = max(feed_dates)
+    latest_listed_date = max(listed_dates)
     gap_dates: list[date] = []
     candidate = last_completed_announcement_date
     while True:
         candidate = _next_weekday(candidate)
-        if candidate >= latest_feed_date:
+        if candidate >= latest_listed_date:
             break
-        if candidate not in feed_dates:
+        if candidate not in listed_dates:
             gap_dates.append(candidate)
     return gap_dates
+
+
+def _snapshot_lookup_dates(
+    invocation_date: date,
+    *,
+    last_completed_announcement_date: date | None,
+    backfill: bool,
+) -> list[date]:
+    """Announcement days worth loading a saved listing snapshot for.
+
+    Backfill: the requested day. Standard run: every weekday after the
+    completed marker up to the invocation date (older days are already done,
+    later ones cannot be announced yet). No marker means a first run, which
+    looks at the current feed day only, so nothing is looked up.
+    """
+    if backfill:
+        return [invocation_date]
+    if last_completed_announcement_date is None:
+        return []
+    days: list[date] = []
+    candidate = _next_weekday(last_completed_announcement_date)
+    while candidate <= invocation_date:
+        days.append(candidate)
+        candidate = _next_weekday(candidate)
+    return days
+
+
+def _load_listing_snapshots(
+    state_store: StateStore,
+    categories: tuple[str, ...],
+    days: list[date],
+) -> dict[str, dict[date, list[str]]]:
+    """Per-category listings for those of days that have a complete saved snapshot."""
+    listings: dict[str, dict[date, list[str]]] = {category: {} for category in categories}
+    for day in days:
+        snapshot = state_store.load_listing_snapshot(day, categories)
+        if snapshot is not None:
+            for category, ids in snapshot.items():
+                listings[category][day] = ids
+    return listings
+
+
+def _save_listing_snapshots(
+    state_store: StateStore,
+    fetcher: ArxivFetcher,
+    categories: tuple[str, ...],
+    days: Collection[date],
+    *,
+    source: str,
+) -> None:
+    """Persist each day's listing so it never needs refetching; failures only warn.
+
+    Snapshots are a recovery aid for later runs, so a write error must not
+    abort the current one.
+    """
+    for day in sorted(days):
+        try:
+            state_store.save_listing_snapshot(day, fetcher.listing_for_day(categories, day), source=source)
+        except OSError as error:
+            LOGGER.warning(
+                "Could not save the %s listing snapshot for %s under %s: %s",
+                source, day.isoformat(), state_store.listings_dir, error,
+            )
 
 
 def _warn_unfilled_listing_gap(gap_dates: list[date]) -> None:
     commands = "\n".join(f"  uv run re-ass --date {day.isoformat()}" for day in gap_dates)
     LOGGER.warning(
         "Announcement day(s) %s to %s were not covered by the arXiv RSS feed and the "
-        "recent-listing fallback failed; continuing with the current feed day. The "
+        "recent-listing fallback did not cover them; continuing with the current feed day. The "
         "completed-announcement marker will advance past these dates, so they will not be "
         "retried automatically. Only days still visible in arXiv's recent listing can be "
         "recovered. To recover a day, run:\n%s\n"
@@ -623,33 +688,58 @@ def run(config: AppConfig, run_date: date | None = None, *, backfill: bool = Fal
         fetcher = ArxivFetcher(page_size=config.arxiv_page_size)
 
         last_completed_announcement_date = state_store.load_completed_announcement_date()
+        snapshot_listings = _load_listing_snapshots(
+            state_store,
+            preferences.categories,
+            _snapshot_lookup_dates(
+                invocation_date,
+                last_completed_announcement_date=last_completed_announcement_date,
+                backfill=backfill,
+            ),
+        )
+        fetcher.seed_listings(snapshot_listings)
+        snapshot_dates = {day for day_to_ids in snapshot_listings.values() for day in day_to_ids}
         feed_dates = fetcher.load_announcement_feed(preferences.categories)
+        _save_listing_snapshots(state_store, fetcher, preferences.categories, feed_dates, source="rss")
         backfill_date = invocation_date if backfill else None
+        listed_dates = snapshot_dates | set(feed_dates)
         gap_dates = _listing_gap_dates(
-            feed_dates,
+            listed_dates,
             last_completed_announcement_date=last_completed_announcement_date,
             backfill_date=backfill_date,
         )
 
         # RSS alone can't answer a gap or a wholly unusable feed; /list is the
-        # gap-fill path for both. Otherwise the feed day is enough on its own.
-        gap_fallback_ran = bool(gap_dates) or not feed_dates
-        gap_fallback_filled = fetcher.load_recent_listings(preferences.categories) if gap_fallback_ran else None
+        # gap-fill path for both. A backfill only needs /list for a date nothing
+        # lists yet, and otherwise the feed day is enough on its own.
+        gap_fallback_ran = bool(gap_dates) or (not backfill and not feed_dates)
+        # The announcement days the fallback's pages showed; () when it failed.
+        recent_listing_dates = (
+            fetcher.load_recent_listings(preferences.categories, tuple(gap_dates)) if gap_fallback_ran else None
+        )
 
         available_dates = list(fetcher.available_announcement_dates(preferences.categories))
+        _save_listing_snapshots(state_store, fetcher, preferences.categories, recent_listing_dates or (), source="list")
         if not backfill and not available_dates:
             raise RuntimeError(
                 f"No announcement listing available: the arXiv RSS feed for {', '.join(preferences.categories)} "
                 "was unusable and the recent-listing fallback failed."
             )
 
-        gap_unfilled = bool(gap_dates) and gap_fallback_filled is False and not backfill
+        # A gap day older than the window the fallback's pages showed was never covered;
+        # one inside it but absent had no announcement (e.g. a holiday). A failed
+        # fallback showed no window, so every gap day is unfilled.
+        unfilled_gap_dates: list[date] = []
+        if recent_listing_dates is not None and not backfill:
+            window_start = min(recent_listing_dates, default=None)
+            unfilled_gap_dates = [day for day in gap_dates if window_start is None or day < window_start]
 
         listing_summary: dict[str, object] = {
             "feed_announcement_dates": [day.isoformat() for day in feed_dates],
+            "snapshot_announcement_dates": [day.isoformat() for day in sorted(snapshot_dates)],
             "listing_gap_dates": [day.isoformat() for day in gap_dates],
             "listing_gap_fallback": (
-                "not_needed" if gap_fallback_filled is None else ("filled" if gap_fallback_filled else "failed")
+                "not_needed" if recent_listing_dates is None else ("filled" if recent_listing_dates else "failed")
             ),
         }
         overall_summary.update(listing_summary)
@@ -686,8 +776,8 @@ def run(config: AppConfig, run_date: date | None = None, *, backfill: bool = Fal
             if listing_summary["listing_gap_fallback"] == "failed":
                 raise ValueError(
                     f"Announcement date {invocation_date.isoformat()} could not be backfilled: the "
-                    "recent-listing fetch failed. Retry this backfill later once arXiv's recent-listing "
-                    "page is reachable again."
+                    "recent-listing fetch failed on both export.arxiv.org and arxiv.org. Retry this backfill "
+                    "later once arXiv's recent-listing page is reachable again."
                 )
             raise ValueError(
                 f"Announcement date {invocation_date.isoformat()} is not visible in the current arXiv recent window."
@@ -698,20 +788,20 @@ def run(config: AppConfig, run_date: date | None = None, *, backfill: bool = Fal
             state_store.save_run_summary(overall_summary, label="overall")
             return 0
         if not ready_dates:
-            if gap_unfilled:
+            if unfilled_gap_dates:
                 # Nothing is processed, so the marker stays put and the next
                 # run retries the gap fill; only warn that it is still pending.
                 LOGGER.warning(
-                    "Recent-listing fallback failed for missed announcement day(s) %s to %s; no feed day is "
+                    "Recent-listing fallback did not cover missed announcement day(s) %s to %s; no feed day is "
                     "ready to process yet, so they stay pending and the next run will retry the gap fill.",
-                    gap_dates[0].isoformat(),
-                    gap_dates[-1].isoformat(),
+                    unfilled_gap_dates[0].isoformat(),
+                    unfilled_gap_dates[-1].isoformat(),
                 )
             LOGGER.info("No pending announcement day maps to a note date on or before %s.", invocation_date.isoformat())
             state_store.save_run_summary(overall_summary, label="overall")
             return 0
-        if gap_unfilled:
-            _warn_unfilled_listing_gap(gap_dates)
+        if unfilled_gap_dates:
+            _warn_unfilled_listing_gap(unfilled_gap_dates)
 
         dates_to_process = ready_dates
         for announcement_date in dates_to_process:

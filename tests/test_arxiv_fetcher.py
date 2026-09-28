@@ -88,7 +88,7 @@ def test_available_announcement_dates_unions_configured_categories() -> None:
     fetcher = ArxivFetcher(
         page_size=10,
         client=SimpleNamespace(results=lambda _search: []),
-        listing_fetcher=lambda category: listing_html_by_category[category],
+        listing_fetcher=lambda category, _host: listing_html_by_category[category],
     )
 
     fetcher.load_recent_listings(("cs.AI", "cs.CL"))
@@ -150,7 +150,7 @@ def test_collect_candidates_fetches_all_listing_ids_for_announcement_date() -> N
     fetcher = ArxivFetcher(
         page_size=10,
         client=client,
-        listing_fetcher=lambda category: listing_html_by_category[category],
+        listing_fetcher=lambda category, _host: listing_html_by_category[category],
     )
 
     fetcher.load_recent_listings(("cs.AI", "cs.CL"))
@@ -193,7 +193,7 @@ def test_collect_candidates_skips_completed_paper_keys_before_metadata_fetch() -
     fetcher = ArxivFetcher(
         page_size=10,
         client=client,
-        listing_fetcher=lambda category: listing_html_by_category[category],
+        listing_fetcher=lambda category, _host: listing_html_by_category[category],
     )
 
     fetcher.load_recent_listings(("cs.AI",))
@@ -212,7 +212,7 @@ def test_collect_candidates_returns_empty_when_all_listing_ids_are_already_compl
     fetcher = ArxivFetcher(
         page_size=10,
         client=SimpleNamespace(results=lambda _search: (_ for _ in ()).throw(AssertionError("API should not be called"))),
-        listing_fetcher=lambda _category: _listing_html(
+        listing_fetcher=lambda _category, _host: _listing_html(
             heading="Tue, 24 Mar 2026 (showing 1 of 1 entries )",
             ids=["2603.10040"],
         ),
@@ -232,7 +232,7 @@ def test_collect_candidates_raises_for_announcement_date_outside_visible_listing
     fetcher = ArxivFetcher(
         page_size=10,
         client=SimpleNamespace(results=lambda _search: []),
-        listing_fetcher=lambda _category: _listing_html(
+        listing_fetcher=lambda _category, _host: _listing_html(
             heading="Tue, 24 Mar 2026 (showing 1 of 1 entries )",
             ids=["2603.10050"],
         ),
@@ -291,7 +291,7 @@ def test_collect_candidates_falls_back_to_abstract_pages_on_export_api_429() -> 
     fetcher = ArxivFetcher(
         page_size=10,
         client=client,
-        listing_fetcher=lambda category: listing_html_by_category[category],
+        listing_fetcher=lambda category, _host: listing_html_by_category[category],
         abstract_fetcher=lambda source_id: abstract_html_by_id[source_id],
     )
 
@@ -342,7 +342,7 @@ def test_collect_candidates_fallback_normalizes_author_names() -> None:
     fetcher = ArxivFetcher(
         page_size=10,
         client=FailingClient(),
-        listing_fetcher=lambda category: listing_html_by_category[category],
+        listing_fetcher=lambda category, _host: listing_html_by_category[category],
         abstract_fetcher=lambda source_id: abstract_html_by_id[source_id],
     )
 
@@ -377,7 +377,7 @@ def test_collect_candidates_falls_back_to_abstract_pages_on_export_api_503() -> 
     fetcher = ArxivFetcher(
         page_size=10,
         client=FailingClient(),
-        listing_fetcher=lambda category: listing_html_by_category[category],
+        listing_fetcher=lambda category, _host: listing_html_by_category[category],
         abstract_fetcher=lambda source_id: abstract_html_by_id[source_id],
     )
 
@@ -394,7 +394,7 @@ def test_collect_candidates_reraises_non_429_client_export_errors() -> None:
     fetcher = ArxivFetcher(
         page_size=10,
         client=SimpleNamespace(results=lambda _search: (_ for _ in ()).throw(arxiv.HTTPError("https://export.arxiv.org/api/query", 0, 404))),
-        listing_fetcher=lambda _category: _listing_html(
+        listing_fetcher=lambda _category, _host: _listing_html(
             heading="Tue, 24 Mar 2026 (showing 1 of 1 entries )",
             ids=["2603.10050"],
         ),
@@ -452,7 +452,7 @@ def test_fetch_listing_html_retries_on_406_then_succeeds(monkeypatch) -> None:
     fetcher = ArxivFetcher(page_size=10, rate_limiter=ArxivRateLimiter())
     ok = fetcher.load_recent_listings(("cs.AI",))
 
-    assert ok is True
+    assert ok == (date(2026, 3, 24),)
     assert fetcher._category_listing("cs.AI") == {date(2026, 3, 24): ["2603.10050"]}
     assert sleeps == [15]
 
@@ -480,7 +480,7 @@ def test_fetch_listing_html_logs_response_detail_on_406(monkeypatch, caplog) -> 
     with caplog.at_level("WARNING"):
         ok = fetcher.load_recent_listings(("cs.AI",))
 
-    assert ok is False
+    assert ok == ()
     combined = "\n".join(record.getMessage() for record in caplog.records)
     assert "Retry-After=300" in combined
     assert "Automated requests are not permitted." in combined
@@ -489,14 +489,20 @@ def test_fetch_listing_html_logs_response_detail_on_406(monkeypatch, caplog) -> 
 def test_load_recent_listings_returns_false_on_non_transient_error(monkeypatch, caplog) -> None:
     import re_ass.arxiv_fetcher as arxiv_fetcher_module
 
-    monkeypatch.setattr(
-        arxiv_fetcher_module.time,
-        "sleep",
-        lambda _seconds: (_ for _ in ()).throw(AssertionError("Should not retry on 404")),
-    )
+    sleeps: list[float] = []
+    fake_now = [0.0]
 
-    def fake_urlopen(_request, timeout):
-        raise HTTPError("https://arxiv.org/list/cs.AI/pastweek", 404, "Not Found", None, None)
+    def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        fake_now[0] += seconds
+
+    monkeypatch.setattr(arxiv_fetcher_module.time, "sleep", fake_sleep)
+    monkeypatch.setattr(arxiv_fetcher_module.time, "monotonic", lambda: fake_now[0])
+    requested_urls: list[str] = []
+
+    def fake_urlopen(request, timeout):
+        requested_urls.append(request.full_url)
+        raise HTTPError(request.full_url, 404, "Not Found", None, None)
 
     monkeypatch.setattr(arxiv_fetcher_module, "urlopen", fake_urlopen)
 
@@ -505,7 +511,13 @@ def test_load_recent_listings_returns_false_on_non_transient_error(monkeypatch, 
     with caplog.at_level("WARNING"):
         ok = fetcher.load_recent_listings(("cs.AI",))
 
-    assert ok is False
+    assert ok == ()
+    # One attempt per host, no retries: the only wait is the crawl delay between them.
+    assert requested_urls == [
+        "https://export.arxiv.org/list/cs.AI/pastweek?show=2000",
+        "https://arxiv.org/list/cs.AI/pastweek?show=2000",
+    ]
+    assert sleeps == [15]
     assert any("cs.AI" in record.getMessage() for record in caplog.records)
 
 
@@ -526,7 +538,7 @@ def test_fetch_listing_html_sends_default_headers(monkeypatch) -> None:
 
     assert len(captured_requests) == 1
     request = captured_requests[0]
-    assert request.full_url == "https://arxiv.org/list/cs.AI/pastweek?show=2000"
+    assert request.full_url == "https://export.arxiv.org/list/cs.AI/pastweek?show=2000"
     # Request.add_header() stores keys via str.capitalize() (e.g. "Accept-encoding"),
     # and get_header() does a literal lookup rather than re-normalizing the name.
     assert request.get_header("Accept") is not None
@@ -555,8 +567,10 @@ def test_load_recent_listings_returns_false_after_exhausting_retries_on_406(monk
     fetcher = ArxivFetcher(page_size=10, rate_limiter=ArxivRateLimiter())
     ok = fetcher.load_recent_listings(("cs.AI",))
 
-    assert ok is False
-    assert sleeps == [15, 30, 90]
+    assert ok == ()
+    # Each host exhausts the full retry schedule before the next is tried.
+    assert sleeps.count(30) == 2
+    assert sleeps.count(90) == 2
 
 
 def test_fetch_abstract_html_requests_export_arxiv_org(monkeypatch) -> None:
@@ -778,13 +792,13 @@ def test_load_recent_listings_merges_older_days_under_feed_day() -> None:
     fetcher = ArxivFetcher(
         page_size=10,
         feed_fetcher=lambda categories: feed_xml,
-        listing_fetcher=lambda category: listing_html,
+        listing_fetcher=lambda category, _host: listing_html,
     )
 
     fetcher.load_announcement_feed(("astro-ph.GA",))
     ok = fetcher.load_recent_listings(("astro-ph.GA",))
 
-    assert ok is True
+    assert ok == (date(2026, 9, 23), date(2026, 9, 24))
     assert fetcher._category_listing("astro-ph.GA") == {
         date(2026, 9, 24): ["2609.30010", "2609.30011"],
         date(2026, 9, 23): ["2609.30099"],
@@ -794,7 +808,7 @@ def test_load_recent_listings_merges_older_days_under_feed_day() -> None:
 def test_load_recent_listings_is_all_or_nothing_when_one_category_fails() -> None:
     listing_html_ga = _listing_html(heading="Tue, 24 Mar 2026 (showing 1 of 1 entries )", ids=["2603.40001"])
 
-    def listing_fetcher(category):
+    def listing_fetcher(category, _host):
         if category == "astro-ph.GA":
             return listing_html_ga
         raise HTTPError("https://arxiv.org/list/astro-ph.CO/pastweek", 404, "Not Found", None, None)
@@ -803,12 +817,79 @@ def test_load_recent_listings_is_all_or_nothing_when_one_category_fails() -> Non
 
     ok = fetcher.load_recent_listings(("astro-ph.GA", "astro-ph.CO"))
 
-    assert ok is False
+    assert ok == ()
     assert fetcher._category_listing("astro-ph.GA") == {}
 
 
+def _hosted_listing_fetcher(pages_by_host: dict[str, str | Exception], requested_hosts: list[str]):
+    """listing_fetcher fake serving one page (or raising one error) per host."""
+
+    def listing_fetcher(_category, host):
+        requested_hosts.append(host)
+        page = pages_by_host[host]
+        if isinstance(page, Exception):
+            raise page
+        return page
+
+    return listing_fetcher
+
+
+_LISTING_24 = _listing_html(heading="Thu, 24 Sep 2026 (showing 1 of 1 entries )", ids=["2609.30010"])
+_LISTING_22 = _listing_html(heading="Tue, 22 Sep 2026 (showing 1 of 1 entries )", ids=["2609.30020"])
+
+
+@pytest.mark.parametrize(
+    "export_page,required_dates,expected_hosts,expected_ids",
+    [
+        (_LISTING_24, (date(2026, 9, 23),), ["export.arxiv.org"], "2609.30010"),
+        (HTTPError("https://export.arxiv.org/list", 503, "Unavailable", None, None), (), ["export.arxiv.org", "arxiv.org"], "2609.30010"),
+        ("<html>challenge</html>", (), ["export.arxiv.org", "arxiv.org"], "2609.30010"),
+        (_LISTING_22, (date(2026, 9, 23),), ["export.arxiv.org", "arxiv.org"], "2609.30010"),
+    ],
+    ids=["export-accepted", "export-error", "export-zero-days", "export-stale"],
+)
+def test_load_recent_listings_prefers_export_host_and_falls_back_to_main_site(
+    export_page, required_dates, expected_hosts, expected_ids, caplog
+) -> None:
+    requested_hosts: list[str] = []
+    main_page = _LISTING_24
+    pages = {"export.arxiv.org": export_page, "arxiv.org": main_page}
+    fetcher = ArxivFetcher(page_size=10, listing_fetcher=_hosted_listing_fetcher(pages, requested_hosts))
+
+    with caplog.at_level("WARNING"):
+        ok = fetcher.load_recent_listings(("astro-ph.GA",), required_dates)
+
+    assert ok == (date(2026, 9, 24),)
+    assert requested_hosts == expected_hosts
+    assert fetcher._category_listing("astro-ph.GA")[date(2026, 9, 24)] == [expected_ids]
+    if len(expected_hosts) == 2:
+        assert any("https://export.arxiv.org/list/astro-ph.GA" in record.getMessage() for record in caplog.records)
+
+
+def test_load_recent_listings_merges_nothing_when_no_host_is_acceptable(caplog) -> None:
+    requested_hosts: list[str] = []
+    pages = {"export.arxiv.org": _LISTING_22, "arxiv.org": HTTPError("u", 406, "No", None, None)}
+    fetcher = ArxivFetcher(page_size=10, listing_fetcher=_hosted_listing_fetcher(pages, requested_hosts))
+
+    with caplog.at_level("WARNING"):
+        ok = fetcher.load_recent_listings(("astro-ph.GA",), (date(2026, 9, 24),))
+
+    assert ok == ()
+    assert fetcher._category_listing("astro-ph.GA") == {}
+    assert any("stale" in record.getMessage() and "2026-09-22" in record.getMessage() for record in caplog.records)
+
+
+def test_seeded_listings_are_visible_and_readable_per_day() -> None:
+    fetcher = ArxivFetcher(page_size=10)
+
+    fetcher.seed_listings({"cs.AI": {date(2026, 9, 24): ["2609.00001"]}, "cs.CL": {}})
+
+    assert fetcher.available_announcement_dates(("cs.AI", "cs.CL")) == (date(2026, 9, 24),)
+    assert fetcher.listing_for_day(("cs.AI", "cs.CL"), date(2026, 9, 24)) == {"cs.AI": ["2609.00001"], "cs.CL": []}
+
+
 def test_load_recent_listings_returns_false_on_incomplete_read(caplog) -> None:
-    def listing_fetcher(_category):
+    def listing_fetcher(_category, _host):
         raise http.client.IncompleteRead(b"partial", 10)
 
     fetcher = ArxivFetcher(page_size=10, listing_fetcher=listing_fetcher)
@@ -816,18 +897,18 @@ def test_load_recent_listings_returns_false_on_incomplete_read(caplog) -> None:
     with caplog.at_level("WARNING"):
         ok = fetcher.load_recent_listings(("astro-ph.GA",))
 
-    assert ok is False
+    assert ok == ()
     assert any("astro-ph.GA" in record.getMessage() for record in caplog.records)
 
 
 def test_load_recent_listings_fails_when_a_category_parses_to_zero_announcement_days(caplog) -> None:
     challenge_page_html = "<html><body>Please verify you are human.</body></html>"
-    fetcher = ArxivFetcher(page_size=10, listing_fetcher=lambda _category: challenge_page_html)
+    fetcher = ArxivFetcher(page_size=10, listing_fetcher=lambda _category, _host: challenge_page_html)
 
     with caplog.at_level("WARNING"):
         ok = fetcher.load_recent_listings(("astro-ph.GA",))
 
-    assert ok is False
+    assert ok == ()
     assert fetcher._category_listing("astro-ph.GA") == {}
     assert any(
         "astro-ph.GA" in record.getMessage() and "zero announcement days" in record.getMessage()
@@ -839,12 +920,12 @@ def test_load_recent_listings_treats_an_unparsable_id_as_a_failure(caplog) -> No
     bad_listing_html = _listing_html(
         heading="Tue, 24 Mar 2026 (showing 1 of 1 entries )", ids=["not-an-id"]
     )
-    fetcher = ArxivFetcher(page_size=10, listing_fetcher=lambda _category: bad_listing_html)
+    fetcher = ArxivFetcher(page_size=10, listing_fetcher=lambda _category, _host: bad_listing_html)
 
     with caplog.at_level("WARNING"):
         ok = fetcher.load_recent_listings(("astro-ph.GA",))
 
-    assert ok is False
+    assert ok == ()
     assert fetcher._category_listing("astro-ph.GA") == {}
     assert any("astro-ph.GA" in record.getMessage() for record in caplog.records)
 
