@@ -8,7 +8,7 @@ import logging
 import time
 from typing import Any
 
-from re_ass.llm_retry import is_retryable_llm_error
+from re_ass.llm_retry import is_retryable_llm_error, retry_delay_seconds
 from re_ass.models import ArxivPaper, PreferenceConfig
 from re_ass.paper_identity import derive_identity
 from re_ass.paper_summariser.providers.base import Provider
@@ -681,15 +681,16 @@ class PaperRanker:
                 last_error = error
                 if not is_retryable_llm_error(error) or attempt == max_attempts - 1:
                     break
+                wait_seconds = retry_delay_seconds(error, default=_RANKING_RETRY_WAIT_SECONDS)
                 LOGGER.warning(
                     "%s failed on attempt %s/%s; retrying in %ss: %s",
                     failure_label,
                     attempt + 1,
                     max_attempts,
-                    _RANKING_RETRY_WAIT_SECONDS,
+                    wait_seconds,
                     error,
                 )
-                time.sleep(_RANKING_RETRY_WAIT_SECONDS)
+                time.sleep(wait_seconds)
 
         raise RankingError(f"{failure_label} failed: {last_error}") from last_error
 

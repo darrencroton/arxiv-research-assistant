@@ -21,7 +21,7 @@ from urllib.request import Request, urlopen
 from dotenv import load_dotenv
 
 from re_ass.arxiv_rate_limit import USER_AGENT
-from re_ass.llm_retry import is_retryable_llm_error
+from re_ass.llm_retry import is_retryable_llm_error, retry_delay_seconds
 from re_ass.models import ArxivPaper
 from re_ass.settings import LlmConfig
 
@@ -920,7 +920,7 @@ def call_llm_with_retry(
             )
             if not is_retryable_llm_error(error) or attempt == max_retries - 1:
                 break
-            wait_time = 2 ** (attempt + 1)
+            wait_time = retry_delay_seconds(error, default=2 ** (attempt + 1))
             LOGGER.info("Waiting %ss before retry...", wait_time)
             time.sleep(wait_time)
 
@@ -970,7 +970,7 @@ def call_glossary_llm_with_retry(
             )
             if not is_retryable_llm_error(error) or attempt == max_retries - 1:
                 break
-            wait_time = 2 ** (attempt + 1)
+            wait_time = retry_delay_seconds(error, default=2 ** (attempt + 1))
             LOGGER.info("Waiting %ss before retry...", wait_time)
             time.sleep(wait_time)
 

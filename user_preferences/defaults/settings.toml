@@ -65,6 +65,7 @@ ranking_batch_size = 0  # 0 = no batching; set to e.g. 25 for local models that 
 # provider = "openai-compatible"
 # model = "minimax/minimax-m2.7-q8"
 # base_url = "http://127.0.0.1:1234/v1"
+# timeout_seconds = 7500  # local servers behind a queueing gate may hold a request for up to 2 h; keep this above that hold
 
 # Optional: override specific fields for paper summarisation only.
 # [llm-summary]

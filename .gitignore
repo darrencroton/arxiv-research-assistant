@@ -28,3 +28,6 @@ user_preferences/*
 .coverage
 
 docs/ab-test-*.md
+
+# Orchestrator delegate run artifacts
+.orchestrator/

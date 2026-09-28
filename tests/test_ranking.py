@@ -5,6 +5,7 @@ import pytest
 from re_ass.models import PreferenceConfig
 from re_ass.ranking import PaperRanker, RankingError, _split_into_batches
 from tests.support import make_app_config, make_paper
+from tests.test_llm_retry import make_status_error
 
 
 class RecordingProvider:
@@ -847,6 +848,56 @@ def test_ranker_does_not_retry_non_retryable_provider_failure(tmp_path, monkeypa
     monkeypatch.setattr("re_ass.ranking.time.sleep", lambda seconds: sleep_calls.append(seconds))
 
     with pytest.raises(RankingError, match="authentication failed"):
+        ranker.rank_papers(_preferences("Agents"), [paper])
+
+    assert provider.calls == 1
+    assert sleep_calls == []
+
+
+def test_ranker_waits_for_gate_retry_after_on_503(tmp_path, monkeypatch) -> None:
+    paper = make_paper(arxiv_id="2603.40093", title="Gate Hold Expired")
+    provider = FlakyProvider(
+        [
+            make_status_error(503, {"Retry-After": "300"}),
+            json.dumps(
+                {
+                    "ranked_papers": [
+                        {"candidate_id": "arxiv:2603.40093", "score": 92, "rationale": "Recovered after the gate freed memory."}
+                    ]
+                }
+            ),
+        ]
+    )
+    ranker = PaperRanker(
+        provider=provider,
+        config=make_app_config(tmp_path).llm,
+        min_summarize_score=90.0,
+        min_selection_score=80.0,
+        max_summarized_papers=100,
+    )
+    sleep_calls: list[float] = []
+    monkeypatch.setattr("re_ass.ranking.time.sleep", lambda seconds: sleep_calls.append(seconds))
+
+    selection = ranker.rank_papers(_preferences("Agents"), [paper])
+
+    assert [item.paper.title for item in selection.selected] == ["Gate Hold Expired"]
+    assert sleep_calls == [300.0]
+
+
+def test_ranker_does_not_retry_gate_507(tmp_path, monkeypatch) -> None:
+    paper = make_paper(arxiv_id="2603.40094", title="Model Cannot Fit")
+    provider = FlakyProvider([make_status_error(507)])
+    ranker = PaperRanker(
+        provider=provider,
+        config=make_app_config(tmp_path).llm,
+        min_summarize_score=90.0,
+        min_selection_score=80.0,
+        max_summarized_papers=100,
+    )
+    sleep_calls: list[float] = []
+    monkeypatch.setattr("re_ass.ranking.time.sleep", lambda seconds: sleep_calls.append(seconds))
+
+    with pytest.raises(RankingError, match="507"):
         ranker.rank_papers(_preferences("Agents"), [paper])
 
     assert provider.calls == 1

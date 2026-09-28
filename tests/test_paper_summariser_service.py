@@ -17,6 +17,7 @@ from re_ass.paper_summariser.service import (
     SourceMetadata,
     build_fallback_tags,
     build_pdf_url,
+    call_llm_with_retry,
     download_arxiv_pdf,
     generate_glossary,
     generate_tags,
@@ -34,6 +35,7 @@ from re_ass.paper_summariser.service import (
     validate_tags_section,
 )
 from tests.support import make_paper, make_app_config
+from tests.test_llm_retry import make_status_error
 
 
 class RecordingProvider(Provider):
@@ -855,3 +857,48 @@ def test_download_arxiv_pdf_converts_incomplete_read_to_truncated_error(
 
     with pytest.raises(PdfDownloadTruncatedError, match="got 13 of 113 expected bytes"):
         download_arxiv_pdf(make_paper(arxiv_id="2609.12060"), tmp_path, make_app_config(tmp_path).llm)
+
+
+class _ScriptedProvider(Provider):
+    """Provider that raises or returns each scripted outcome in turn."""
+
+    def __init__(self, outcomes):
+        super().__init__()
+        self.outcomes = list(outcomes)
+        self.calls = 0
+
+    def setup(self):
+        pass
+
+    def process_document(self, content, is_pdf, system_prompt, user_prompt, max_tokens=12288, temperature=None):
+        self.calls += 1
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    def get_max_context_size(self):
+        return 200_000
+
+
+def test_call_llm_with_retry_waits_for_gate_retry_after_on_503(monkeypatch) -> None:
+    provider = _ScriptedProvider([make_status_error(503, {"Retry-After": "300"}), "# Summary\n\nRecovered."])
+    sleep_calls: list[float] = []
+    monkeypatch.setattr(paper_service.time, "sleep", lambda seconds: sleep_calls.append(seconds))
+
+    result = call_llm_with_retry(provider, "text", False, "system", "user", max_tokens=100, max_retries=3)
+
+    assert result == "# Summary\n\nRecovered."
+    assert sleep_calls == [300.0]
+
+
+def test_call_llm_with_retry_does_not_retry_gate_507(monkeypatch) -> None:
+    provider = _ScriptedProvider([make_status_error(507)])
+    sleep_calls: list[float] = []
+    monkeypatch.setattr(paper_service.time, "sleep", lambda seconds: sleep_calls.append(seconds))
+
+    with pytest.raises(PaperSummariserError, match="507"):
+        call_llm_with_retry(provider, "text", False, "system", "user", max_tokens=100, max_retries=3)
+
+    assert provider.calls == 1
+    assert sleep_calls == []
