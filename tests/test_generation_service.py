@@ -120,7 +120,7 @@ def test_generation_service_raises_when_summariser_fails(tmp_path: Path) -> None
         service.build_paper_note_content(make_paper(title="Broken Paper"), tmp_path / "paper.pdf")
 
 
-def test_stage_pdf_download_retries_on_406_then_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_stage_pdf_download_retries_on_503_then_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sleeps: list[float] = []
     fake_now = [0.0]
 
@@ -138,8 +138,8 @@ def test_stage_pdf_download_retries_on_406_then_succeeds(tmp_path: Path, monkeyp
     def fake_download(_paper, _destination_dir, _config):
         attempts.append(1)
         if len(attempts) == 1:
-            cause = HTTPError("https://export.arxiv.org/pdf/2603.15732v1", 406, "Not Acceptable", None, None)
-            raise PaperSummariserError("Downloading https://export.arxiv.org/pdf/2603.15732v1 returned HTTP 406.") from cause
+            cause = HTTPError("https://export.arxiv.org/pdf/2603.15732v1", 503, "Service Unavailable", None, None)
+            raise PaperSummariserError("Downloading https://export.arxiv.org/pdf/2603.15732v1 returned HTTP 503.") from cause
         return destination
 
     monkeypatch.setattr(generation_service_module, "download_arxiv_pdf", fake_download)
@@ -219,6 +219,32 @@ def test_stage_pdf_download_retries_a_truncated_download_then_succeeds(
     assert result == destination
     assert len(attempts) == 2
     assert sleeps == [15]
+
+
+def test_stage_pdf_download_does_not_retry_406(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sleeps: list[float] = []
+    monkeypatch.setattr(generation_service_module.time, "sleep", sleeps.append)
+    attempts: list[int] = []
+
+    def fake_download(_paper, _destination_dir, _config):
+        attempts.append(1)
+        cause = HTTPError("https://export.arxiv.org/pdf/2603.15732v1", 406, "Not Acceptable", None, None)
+        raise PaperSummariserError("Downloading https://export.arxiv.org/pdf/2603.15732v1 returned HTTP 406.") from cause
+
+    monkeypatch.setattr(generation_service_module, "download_arxiv_pdf", fake_download)
+
+    service = GenerationService(
+        config=make_app_config(tmp_path).llm,
+        provider=object(),
+        paper_summariser=StubPaperSummariser(),
+        arxiv_rate_limiter=ArxivRateLimiter(),
+    )
+
+    with pytest.raises(GenerationError, match="HTTP 406"):
+        service.stage_pdf_download(make_paper(), tmp_path)
+
+    assert len(attempts) == 1
+    assert sleeps == []
 
 
 def test_stage_pdf_download_defaults_to_the_shared_arxiv_rate_limiter(tmp_path: Path) -> None:

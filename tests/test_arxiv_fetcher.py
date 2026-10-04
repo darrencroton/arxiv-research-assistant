@@ -1,4 +1,5 @@
 from datetime import date, datetime, timezone
+import email.message
 import http.client
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,8 +10,12 @@ import zlib
 import arxiv
 import pytest
 
-from re_ass.arxiv_fetcher import ArxivFetcher, _normalize_author_name, parse_rss_listing
-from re_ass.arxiv_rate_limit import ArxivRateLimiter, get_shared_limiter
+from re_ass.arxiv_fetcher import (
+    ArxivFetcher,
+    _normalize_author_name,
+    parse_rss_listing,
+)
+from re_ass.arxiv_rate_limit import ArxivRateLimiter, ArxivResponse, ArxivTransferError, get_shared_limiter
 from re_ass.models import PreferenceConfig
 
 _FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -63,20 +68,12 @@ def _abstract_html(
     )
 
 
-class _FakeHtmlResponse:
-    """Stands in for urlopen's context-managed response, serving fixed HTML."""
-
-    def __init__(self, html: str) -> None:
-        self._html = html
-
-    def __enter__(self):
-        return SimpleNamespace(
-            read=lambda: self._html.encode("utf-8"),
-            headers=SimpleNamespace(get=lambda *_args: None),
-        )
-
-    def __exit__(self, *args):
-        return None
+def _fake_response(body: str, *, age: int | None = None) -> ArxivResponse:
+    """Stands in for fetch_arxiv_url's result, serving fixed text (optionally with a CDN Age header)."""
+    headers = email.message.Message()
+    if age is not None:
+        headers["Age"] = str(age)
+    return ArxivResponse(200, headers, body.encode("utf-8"))
 
 
 def test_available_announcement_dates_unions_configured_categories() -> None:
@@ -419,7 +416,7 @@ def test_arxiv_fetcher_defaults_to_the_shared_rate_limiter() -> None:
     assert fetcher._rate_limiter is get_shared_limiter()
 
 
-def test_fetch_listing_html_retries_on_406_then_succeeds(monkeypatch) -> None:
+def test_fetch_listing_html_retries_on_503_then_succeeds(monkeypatch) -> None:
     import re_ass.arxiv_fetcher as arxiv_fetcher_module
 
     sleeps: list[float] = []
@@ -437,17 +434,17 @@ def test_fetch_listing_html_retries_on_406_then_succeeds(monkeypatch) -> None:
         ids=["2603.10050"],
     )
     responses = iter([
-        HTTPError("https://arxiv.org/list/cs.AI/pastweek", 406, "Not Acceptable", None, None),
-        _FakeHtmlResponse(listing_html),
+        HTTPError("https://arxiv.org/list/cs.AI/pastweek", 503, "Service Unavailable", None, None),
+        _fake_response(listing_html),
     ])
 
-    def fake_urlopen(_request, timeout):
+    def fake_fetch(_url, *, headers, timeout, max_bytes=None):
         next_response = next(responses)
         if isinstance(next_response, HTTPError):
             raise next_response
         return next_response
 
-    monkeypatch.setattr(arxiv_fetcher_module, "urlopen", fake_urlopen)
+    monkeypatch.setattr(arxiv_fetcher_module, "fetch_arxiv_url", fake_fetch)
 
     fetcher = ArxivFetcher(page_size=10, rate_limiter=ArxivRateLimiter())
     ok = fetcher.load_recent_listings(("cs.AI",))
@@ -457,23 +454,23 @@ def test_fetch_listing_html_retries_on_406_then_succeeds(monkeypatch) -> None:
     assert sleeps == [15]
 
 
-def test_fetch_listing_html_logs_response_detail_on_406(monkeypatch, caplog) -> None:
+def test_fetch_listing_html_logs_response_detail_on_503(monkeypatch, caplog) -> None:
     import io
 
     import re_ass.arxiv_fetcher as arxiv_fetcher_module
 
     monkeypatch.setattr(arxiv_fetcher_module.time, "sleep", lambda _seconds: None)
 
-    def fake_urlopen(_request, timeout):
+    def fake_fetch(_url, *, headers, timeout, max_bytes=None):
         raise HTTPError(
             "https://arxiv.org/list/cs.AI/pastweek",
-            406,
-            "Not Acceptable",
+            503,
+            "Service Unavailable",
             {"Retry-After": "300"},
             io.BytesIO(b"Automated requests are not permitted."),
         )
 
-    monkeypatch.setattr(arxiv_fetcher_module, "urlopen", fake_urlopen)
+    monkeypatch.setattr(arxiv_fetcher_module, "fetch_arxiv_url", fake_fetch)
 
     fetcher = ArxivFetcher(page_size=10, rate_limiter=ArxivRateLimiter())
 
@@ -500,11 +497,11 @@ def test_load_recent_listings_returns_false_on_non_transient_error(monkeypatch, 
     monkeypatch.setattr(arxiv_fetcher_module.time, "monotonic", lambda: fake_now[0])
     requested_urls: list[str] = []
 
-    def fake_urlopen(request, timeout):
-        requested_urls.append(request.full_url)
-        raise HTTPError(request.full_url, 404, "Not Found", None, None)
+    def fake_fetch(url, *, headers, timeout, max_bytes=None):
+        requested_urls.append(url)
+        raise HTTPError(url, 404, "Not Found", None, None)
 
-    monkeypatch.setattr(arxiv_fetcher_module, "urlopen", fake_urlopen)
+    monkeypatch.setattr(arxiv_fetcher_module, "fetch_arxiv_url", fake_fetch)
 
     fetcher = ArxivFetcher(page_size=10, rate_limiter=ArxivRateLimiter())
 
@@ -527,26 +524,24 @@ def test_fetch_listing_html_sends_default_headers(monkeypatch) -> None:
     listing_html = _listing_html(heading="Tue, 24 Mar 2026 (showing 1 of 1 entries )", ids=["2603.10050"])
     captured_requests = []
 
-    def fake_urlopen(request, timeout):
-        captured_requests.append(request)
-        return _FakeHtmlResponse(listing_html)
+    def fake_fetch(url, *, headers, timeout, max_bytes=None):
+        captured_requests.append((url, headers))
+        return _fake_response(listing_html)
 
-    monkeypatch.setattr(arxiv_fetcher_module, "urlopen", fake_urlopen)
+    monkeypatch.setattr(arxiv_fetcher_module, "fetch_arxiv_url", fake_fetch)
 
     fetcher = ArxivFetcher(page_size=10, rate_limiter=ArxivRateLimiter())
     fetcher.load_recent_listings(("cs.AI",))
 
     assert len(captured_requests) == 1
-    request = captured_requests[0]
-    assert request.full_url == "https://export.arxiv.org/list/cs.AI/pastweek?show=2000"
-    # Request.add_header() stores keys via str.capitalize() (e.g. "Accept-encoding"),
-    # and get_header() does a literal lookup rather than re-normalizing the name.
-    assert request.get_header("Accept") is not None
-    assert request.get_header("Accept-encoding") == "gzip, deflate"
-    assert request.get_header("Accept-language") is not None
+    url, headers = captured_requests[0]
+    assert url == "https://export.arxiv.org/list/cs.AI/pastweek?show=2000"
+    assert headers["Accept"]
+    assert headers["Accept-Encoding"] == "gzip, deflate"
+    assert headers["Accept-Language"]
 
 
-def test_load_recent_listings_returns_false_after_exhausting_retries_on_406(monkeypatch) -> None:
+def test_load_recent_listings_returns_false_after_exhausting_retries_on_503(monkeypatch) -> None:
     import re_ass.arxiv_fetcher as arxiv_fetcher_module
 
     sleeps: list[float] = []
@@ -559,10 +554,10 @@ def test_load_recent_listings_returns_false_after_exhausting_retries_on_406(monk
     monkeypatch.setattr(arxiv_fetcher_module.time, "sleep", fake_sleep)
     monkeypatch.setattr(arxiv_fetcher_module.time, "monotonic", lambda: fake_now[0])
 
-    def fake_urlopen(_request, timeout):
-        raise HTTPError("https://arxiv.org/list/cs.AI/pastweek", 406, "Not Acceptable", None, None)
+    def fake_fetch(_url, *, headers, timeout, max_bytes=None):
+        raise HTTPError("https://arxiv.org/list/cs.AI/pastweek", 503, "Service Unavailable", None, None)
 
-    monkeypatch.setattr(arxiv_fetcher_module, "urlopen", fake_urlopen)
+    monkeypatch.setattr(arxiv_fetcher_module, "fetch_arxiv_url", fake_fetch)
 
     fetcher = ArxivFetcher(page_size=10, rate_limiter=ArxivRateLimiter())
     ok = fetcher.load_recent_listings(("cs.AI",))
@@ -572,6 +567,82 @@ def test_load_recent_listings_returns_false_after_exhausting_retries_on_406(monk
     assert sleeps.count(30) == 2
     assert sleeps.count(90) == 2
 
+
+def test_fetch_listing_html_does_not_retry_406(monkeypatch) -> None:
+    import re_ass.arxiv_fetcher as arxiv_fetcher_module
+
+    sleeps: list[float] = []
+    fake_now = [0.0]
+
+    def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        fake_now[0] += seconds
+
+    monkeypatch.setattr(arxiv_fetcher_module.time, "sleep", fake_sleep)
+    monkeypatch.setattr(arxiv_fetcher_module.time, "monotonic", lambda: fake_now[0])
+    requested_urls: list[str] = []
+
+    def fake_fetch(url, *, headers, timeout, max_bytes=None):
+        requested_urls.append(url)
+        raise HTTPError(url, 406, "Not Acceptable", None, None)
+
+    monkeypatch.setattr(arxiv_fetcher_module, "fetch_arxiv_url", fake_fetch)
+
+    fetcher = ArxivFetcher(page_size=10, rate_limiter=ArxivRateLimiter())
+    ok = fetcher.load_recent_listings(("cs.AI",))
+
+    assert ok == ()
+    # A 406 is not a passing window: one attempt per host, only the crawl delay between them.
+    assert len(requested_urls) == 2
+    assert sleeps == [15]
+
+
+def test_fetch_listing_html_wraps_transfer_errors_as_a_listing_failure(monkeypatch, caplog) -> None:
+    import re_ass.arxiv_fetcher as arxiv_fetcher_module
+
+    monkeypatch.setattr(arxiv_fetcher_module.time, "sleep", lambda _seconds: None)
+
+    def fake_fetch(url, *, headers, timeout, max_bytes=None):
+        raise ArxivTransferError("curl exited 28 fetching x: timed out", 28)
+
+    monkeypatch.setattr(arxiv_fetcher_module, "fetch_arxiv_url", fake_fetch)
+
+    class CountingLimiter(ArxivRateLimiter):
+        completed = 0
+
+        def mark_request_completed(self) -> None:
+            CountingLimiter.completed += 1
+            super().mark_request_completed()
+
+    fetcher = ArxivFetcher(page_size=10, rate_limiter=CountingLimiter())
+    with caplog.at_level("WARNING"):
+        ok = fetcher.load_recent_listings(("cs.AI",))
+
+    assert ok == ()
+    assert any("curl exited 28" in record.getMessage() for record in caplog.records)
+    # A failed transfer still counts against the crawl delay (one per host tried).
+    assert CountingLimiter.completed == 2
+
+
+def test_recent_listing_accepts_an_old_cache_entry_whose_content_is_current(monkeypatch) -> None:
+    # 2026-10-05: arxiv.org served astro-ph.CO from a 152,008 s (~42 h) old cache entry that
+    # was still correct, because /list does not change over a US weekend. Staleness is judged
+    # on content (newest day shown), never on the Age header alone.
+    import re_ass.arxiv_fetcher as arxiv_fetcher_module
+
+    requested_urls: list[str] = []
+
+    def fake_fetch(url, *, headers, timeout, max_bytes=None):
+        requested_urls.append(url)
+        return _fake_response(_LISTING_24, age=152_008)
+
+    monkeypatch.setattr(arxiv_fetcher_module, "fetch_arxiv_url", fake_fetch)
+
+    fetcher = ArxivFetcher(page_size=10, rate_limiter=ArxivRateLimiter())
+    ok = fetcher.load_recent_listings(("astro-ph.GA",), (date(2026, 9, 24),), expected_latest=date(2026, 9, 24))
+
+    assert ok == (date(2026, 9, 24),)
+    assert requested_urls == ["https://export.arxiv.org/list/astro-ph.GA/pastweek?show=2000"]
 
 def test_fetch_abstract_html_requests_export_arxiv_org(monkeypatch) -> None:
     import re_ass.arxiv_fetcher as arxiv_fetcher_module
@@ -584,11 +655,11 @@ def test_fetch_abstract_html_requests_export_arxiv_org(monkeypatch) -> None:
         abstract="An example abstract.",
     )
 
-    def fake_urlopen(request, timeout):
-        requested_urls.append(request.full_url)
-        return _FakeHtmlResponse(abstract_html)
+    def fake_fetch(url, *, headers, timeout, max_bytes=None):
+        requested_urls.append(url)
+        return _fake_response(abstract_html)
 
-    monkeypatch.setattr(arxiv_fetcher_module, "urlopen", fake_urlopen)
+    monkeypatch.setattr(arxiv_fetcher_module, "fetch_arxiv_url", fake_fetch)
 
     fetcher = ArxivFetcher(page_size=10, rate_limiter=ArxivRateLimiter())
     fetcher._fetch_abstract_html("2603.10050")
@@ -614,11 +685,11 @@ def test_load_recent_listings_respects_crawl_delay_between_categories(monkeypatc
         "cs.CL": _listing_html(heading="Tue, 24 Mar 2026 (showing 1 of 1 entries )", ids=["2603.10051"]),
     }
 
-    def fake_urlopen(request, timeout):
-        category = "cs.AI" if "cs.AI" in request.full_url else "cs.CL"
-        return _FakeHtmlResponse(listing_html_by_category[category])
+    def fake_fetch(url, *, headers, timeout, max_bytes=None):
+        category = "cs.AI" if "cs.AI" in url else "cs.CL"
+        return _fake_response(listing_html_by_category[category])
 
-    monkeypatch.setattr(arxiv_fetcher_module, "urlopen", fake_urlopen)
+    monkeypatch.setattr(arxiv_fetcher_module, "fetch_arxiv_url", fake_fetch)
 
     fetcher = ArxivFetcher(page_size=10, rate_limiter=ArxivRateLimiter())
     fetcher.load_recent_listings(("cs.AI", "cs.CL"))
@@ -712,21 +783,21 @@ def test_load_announcement_feed_requests_rss_url_through_limiter_with_default_he
 
     captured_requests = []
 
-    def fake_urlopen(request, timeout):
-        captured_requests.append(request)
-        return _FakeHtmlResponse(_MINIMAL_RSS_XML)
+    def fake_fetch(url, *, headers, timeout, max_bytes=None):
+        captured_requests.append((url, headers))
+        return _fake_response(_MINIMAL_RSS_XML)
 
-    monkeypatch.setattr(arxiv_fetcher_module, "urlopen", fake_urlopen)
+    monkeypatch.setattr(arxiv_fetcher_module, "fetch_arxiv_url", fake_fetch)
 
     fetcher = ArxivFetcher(page_size=10, rate_limiter=ArxivRateLimiter())
     fetcher.load_announcement_feed(("cs.AI", "cs.CL"))
     fetcher.load_announcement_feed(("cs.AI", "cs.CL"))
 
     assert len(captured_requests) == 2
-    request = captured_requests[0]
-    assert request.full_url == "https://rss.arxiv.org/rss/cs.AI+cs.CL"
-    assert request.get_header("Accept") is not None
-    assert request.get_header("Accept-encoding") == "gzip, deflate"
+    url, headers = captured_requests[0]
+    assert url == "https://rss.arxiv.org/rss/cs.AI+cs.CL"
+    assert headers["Accept"]
+    assert headers["Accept-Encoding"] == "gzip, deflate"
     # A second feed load within the same fetcher pays the full crawl-delay.
     assert sleeps == [15]
 
@@ -973,3 +1044,123 @@ def test_load_announcement_feed_seeds_ids_that_reach_collect_candidates() -> Non
 
     assert client.searches[0].id_list == rss_ids
     assert [paper.title for paper in papers] == [f"RSS Seeded Paper {source_id}" for source_id in rss_ids]
+
+
+_LISTING_23 = _listing_html(heading="Wed, 23 Sep 2026 (showing 1 of 1 entries )", ids=["2609.30030"])
+
+
+@pytest.mark.parametrize(
+    "export_page,main_page,expected_hosts,expected_days",
+    [
+        (_LISTING_24, _LISTING_22, ["export.arxiv.org"], (date(2026, 9, 24),)),
+        (_LISTING_22, _LISTING_24, ["export.arxiv.org", "arxiv.org"], (date(2026, 9, 24),)),
+        (
+            _LISTING_22,
+            HTTPError("https://arxiv.org/list", 406, "Not Acceptable", None, None),
+            ["export.arxiv.org", "arxiv.org"],
+            (date(2026, 9, 22),),
+        ),
+        (_LISTING_23, _LISTING_22, ["export.arxiv.org", "arxiv.org"], (date(2026, 9, 23),)),
+    ],
+    ids=["export-current", "export-behind-main-current", "export-behind-main-error", "both-behind-freshest-wins"],
+)
+def test_load_recent_listings_expected_latest_prefers_a_current_host_and_falls_back_to_the_freshest(
+    export_page, main_page, expected_hosts, expected_days
+) -> None:
+    requested_hosts: list[str] = []
+    pages = {"export.arxiv.org": export_page, "arxiv.org": main_page}
+    fetcher = ArxivFetcher(page_size=10, listing_fetcher=_hosted_listing_fetcher(pages, requested_hosts))
+
+    days = fetcher.load_recent_listings(("astro-ph.GA",), expected_latest=date(2026, 9, 24))
+
+    assert requested_hosts == expected_hosts
+    assert days == expected_days
+
+
+_LISTING_GA_FRI = _listing_html(heading="Fri, 2 Oct 2026 (showing 1 of 1 entries )", ids=["2610.00001"])
+_LISTING_CO_THU = _listing_html(heading="Thu, 1 Oct 2026 (showing 1 of 1 entries )", ids=["2610.00002"])
+_LISTING_CO_SEP28 = _listing_html(heading="Mon, 28 Sep 2026 (showing 1 of 1 entries )", ids=["2609.00003"])
+# Sunday 2026-10-04 20:00 UTC; Friday 2026-10-02 was announced 2026-10-01 20:00 EDT (2026-10-02 00:00 UTC).
+_SUNDAY_EVENING_UTC = datetime(2026, 10, 4, 20, 0, tzinfo=timezone.utc)
+
+
+def _paged_fetch(pages: dict[str, object], requested_urls: list[str]):
+    """fetch_arxiv_url fake: url substring -> response or exception."""
+
+    def fake_fetch(url, *, headers, timeout, max_bytes=None):
+        requested_urls.append(url)
+        for key, page in pages.items():
+            if key in url:
+                if isinstance(page, Exception):
+                    raise page
+                return page
+        raise AssertionError(f"unexpected url {url}")
+
+    return fake_fetch
+
+
+def test_recent_listing_never_uses_a_page_cached_before_the_expected_day_was_announced(monkeypatch, caplog) -> None:
+    # Review finding: GA is current but CO's only page is export's 6-day-old cache entry
+    # (arxiv.org refuses). Using it would record Friday with CO = [] and silently drop CO's
+    # Friday papers, so the whole fallback must fail instead.
+    import re_ass.arxiv_fetcher as arxiv_fetcher_module
+
+    requested_urls: list[str] = []
+    pages = {
+        "export.arxiv.org/list/astro-ph.GA": _fake_response(_LISTING_GA_FRI, age=100),
+        "export.arxiv.org/list/astro-ph.CO": _fake_response(_LISTING_CO_SEP28, age=512_239),
+        "https://arxiv.org/list/astro-ph.CO": HTTPError("https://arxiv.org/list", 404, "Not Found", None, None),
+    }
+    monkeypatch.setattr(arxiv_fetcher_module, "fetch_arxiv_url", _paged_fetch(pages, requested_urls))
+    fetcher = ArxivFetcher(page_size=10, rate_limiter=ArxivRateLimiter(), clock=lambda: _SUNDAY_EVENING_UTC)
+
+    with caplog.at_level("WARNING"):
+        days = fetcher.load_recent_listings(("astro-ph.GA", "astro-ph.CO"), expected_latest=date(2026, 10, 2))
+
+    assert days == ()
+    assert fetcher.available_announcement_dates(("astro-ph.GA", "astro-ph.CO")) == ()
+    assert any(
+        "cached copy from 2026-09-28" in record.getMessage() and "treating it as stale" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_recent_listing_uses_a_behind_page_cached_after_the_expected_day_was_announced(monkeypatch) -> None:
+    # CO's newest day is Thursday on a page cached after Friday went out: CO genuinely
+    # listed nothing on Friday, so the page is used (after trying the other host).
+    import re_ass.arxiv_fetcher as arxiv_fetcher_module
+
+    requested_urls: list[str] = []
+    pages = {
+        "export.arxiv.org/list/astro-ph.GA": _fake_response(_LISTING_GA_FRI, age=100),
+        "export.arxiv.org/list/astro-ph.CO": _fake_response(_LISTING_CO_SEP28, age=512_239),
+        # 152,008 s before Sunday 20:00 UTC is Saturday ~01:47 UTC, after Friday's announcement.
+        "https://arxiv.org/list/astro-ph.CO": _fake_response(_LISTING_CO_THU, age=152_008),
+    }
+    monkeypatch.setattr(arxiv_fetcher_module, "fetch_arxiv_url", _paged_fetch(pages, requested_urls))
+    fetcher = ArxivFetcher(page_size=10, rate_limiter=ArxivRateLimiter(), clock=lambda: _SUNDAY_EVENING_UTC)
+
+    days = fetcher.load_recent_listings(("astro-ph.GA", "astro-ph.CO"), expected_latest=date(2026, 10, 2))
+
+    assert days == (date(2026, 10, 1), date(2026, 10, 2))
+    assert fetcher.listing_for_day(("astro-ph.GA", "astro-ph.CO"), date(2026, 10, 2)) == {
+        "astro-ph.GA": ["2610.00001"],
+        "astro-ph.CO": [],
+    }
+    assert fetcher.listing_for_day(("astro-ph.CO",), date(2026, 10, 1)) == {"astro-ph.CO": ["2610.00002"]}
+
+
+def test_recent_listing_treats_a_behind_page_without_an_age_header_as_stale(monkeypatch) -> None:
+    # arXiv's CDN always sends Age, so its absence is unknown freshness and must
+    # not certify that CO listed nothing on Friday.
+    import re_ass.arxiv_fetcher as arxiv_fetcher_module
+
+    pages = {
+        "export.arxiv.org/list/astro-ph.GA": _fake_response(_LISTING_GA_FRI, age=100),
+        "export.arxiv.org/list/astro-ph.CO": _fake_response(_LISTING_CO_THU),
+        "https://arxiv.org/list/astro-ph.CO": _fake_response(_LISTING_CO_THU),
+    }
+    monkeypatch.setattr(arxiv_fetcher_module, "fetch_arxiv_url", _paged_fetch(pages, []))
+    fetcher = ArxivFetcher(page_size=10, rate_limiter=ArxivRateLimiter(), clock=lambda: _SUNDAY_EVENING_UTC)
+
+    assert fetcher.load_recent_listings(("astro-ph.GA", "astro-ph.CO"), expected_latest=date(2026, 10, 2)) == ()

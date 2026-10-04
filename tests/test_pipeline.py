@@ -10,7 +10,7 @@ from re_ass.generation_service import GenerationError
 from re_ass.models import PreferenceConfig
 from re_ass.note_manager import NoteManager
 from re_ass.paper_identity import derive_identity, extract_source_id
-from re_ass.pipeline import _listing_gap_dates, _snapshot_lookup_dates, run
+from re_ass.pipeline import _expected_latest_announcement_date, _listing_gap_dates, _snapshot_lookup_dates, run
 from re_ass.ranking import RankingError
 from re_ass.state_store import StateStore
 from tests.support import make_app_config, make_paper
@@ -84,6 +84,7 @@ class FakeFetcher:
         self.recent_listing_ok = recent_listing_ok
         self.recent_listing_calls: list[tuple[str, ...]] = []
         self.recent_listing_required_dates: list[tuple[date, ...]] = []
+        self.recent_listing_expected_latest: list[date | None] = []
         self.seeded_dates: set[date] = set()
         self._recent_listing_loaded = False
 
@@ -97,9 +98,10 @@ class FakeFetcher:
     def load_announcement_feed(self, _categories):
         return self.feed_dates
 
-    def load_recent_listings(self, categories, required_dates=()):
+    def load_recent_listings(self, categories, required_dates=(), *, expected_latest=None):
         self.recent_listing_calls.append(tuple(categories))
         self.recent_listing_required_dates.append(tuple(required_dates))
+        self.recent_listing_expected_latest.append(expected_latest)
         if not self.recent_listing_ok:
             return ()
         self._recent_listing_loaded = True
@@ -1155,3 +1157,112 @@ def test_pipeline_warns_only_for_gap_days_older_than_the_recent_listing_window(
     assert "--date 2026-09-18" in combined
     assert "--date 2026-09-21" not in combined
     assert "--date 2026-09-22" not in combined
+
+
+@pytest.mark.parametrize(
+    "invocation_date,expected",
+    [
+        (date(2026, 10, 3), date(2026, 10, 2)),
+        (date(2026, 10, 4), date(2026, 10, 2)),
+        (date(2026, 10, 5), date(2026, 10, 2)),
+        (date(2026, 10, 6), date(2026, 10, 5)),
+    ],
+    ids=["saturday", "sunday", "monday", "tuesday"],
+)
+def test_expected_latest_announcement_date_is_the_previous_weekday(invocation_date, expected) -> None:
+    assert _expected_latest_announcement_date(invocation_date) == expected
+
+
+def test_pipeline_monday_run_with_empty_feed_asks_recent_listing_for_friday(tmp_path: Path, monkeypatch) -> None:
+    config = make_app_config(tmp_path, shift_announcements_to_next_weekday=True)
+    StateStore(config).save_completed_announcement_date(date(2026, 10, 1))
+    fetcher = FakeFetcher(
+        [make_paper(arxiv_id="2610.00010", title="Friday Paper")],
+        feed_dates=(),
+        recent_dates=[date(2026, 9, 28), date(2026, 10, 1), date(2026, 10, 2)],
+    )
+    _patch_pipeline(monkeypatch, fetcher)
+
+    assert run(config, date(2026, 10, 5)) == 0
+
+    assert fetcher.recent_listing_expected_latest == [date(2026, 10, 2)]
+    assert "Friday Paper" in (config.daily_notes_dir / "2026-10-05.md").read_text(encoding="utf-8")
+    run_summary = json.loads(
+        next(config.state_runs_dir.glob("*announcement-2026-10-02*.json")).read_text(encoding="utf-8")
+    )
+    assert run_summary["listing_gap_fallback"] == "filled"
+    assert run_summary["listing_behind_expected"] is False
+
+
+def test_pipeline_warns_and_keeps_marker_when_every_listing_source_is_stale(
+    tmp_path: Path, monkeypatch, caplog
+) -> None:
+    # 2026-10-05: the feed is empty (weekend in the US) and export.arxiv.org's
+    # /list still ended at 2026-09-28; that must not pass as "nothing new".
+    config = make_app_config(tmp_path, shift_announcements_to_next_weekday=True)
+    StateStore(config).save_completed_announcement_date(date(2026, 10, 1))
+    fetcher = FakeFetcher([], feed_dates=(), recent_dates=[date(2026, 9, 22), date(2026, 9, 28)])
+    _patch_pipeline(monkeypatch, fetcher)
+
+    with caplog.at_level("WARNING"):
+        assert run(config, date(2026, 10, 5)) == 0
+
+    combined = "\n".join(record.getMessage() for record in caplog.records)
+    assert "uv run re-ass --date 2026-10-02" in combined
+    assert "2026-09-28" in combined
+    run_summary = json.loads(next(config.state_runs_dir.glob("*overall*.json")).read_text(encoding="utf-8"))
+    assert run_summary["listing_gap_fallback"] == "stale"
+    assert run_summary["listing_behind_expected"] is True
+    assert run_summary["expected_latest_announcement_date"] == "2026-10-02"
+    assert StateStore(config).load_completed_announcement_date() == date(2026, 10, 1)
+
+
+def test_pipeline_does_not_warn_when_expected_day_is_already_completed(tmp_path: Path, monkeypatch, caplog) -> None:
+    config = make_app_config(tmp_path, shift_announcements_to_next_weekday=True)
+    StateStore(config).save_completed_announcement_date(date(2026, 10, 2))
+    fetcher = FakeFetcher([], feed_dates=(), recent_dates=[date(2026, 9, 28)])
+    _patch_pipeline(monkeypatch, fetcher)
+
+    with caplog.at_level("WARNING"):
+        assert run(config, date(2026, 10, 5)) == 0
+
+    assert fetcher.recent_listing_expected_latest == [None]
+    assert not any("should already be announced" in record.getMessage() for record in caplog.records)
+
+
+def test_saturday_run_snapshots_friday_so_monday_needs_no_recent_listing(tmp_path: Path, monkeypatch) -> None:
+    config = make_app_config(tmp_path, shift_announcements_to_next_weekday=True)
+    StateStore(config).save_completed_announcement_date(date(2026, 10, 1))
+    paper = make_paper(arxiv_id="2610.00020", title="Snapshotted Friday Paper")
+
+    saturday_fetcher = FakeFetcher([paper], feed_dates=[date(2026, 10, 2)])
+    _patch_pipeline(monkeypatch, saturday_fetcher)
+    assert run(config, date(2026, 10, 3)) == 0
+
+    # Friday maps to Monday's note, so Saturday only records the listing.
+    assert StateStore(config).load_listing_snapshot(date(2026, 10, 2), ("astro-ph.GA",)) is not None
+    assert not any(config.daily_notes_dir.glob("*.md"))
+    assert StateStore(config).load_completed_announcement_date() == date(2026, 10, 1)
+
+    monday_fetcher = FakeFetcher([paper], feed_dates=(), recent_listing_ok=False)
+    _patch_pipeline(monkeypatch, monday_fetcher)
+    assert run(config, date(2026, 10, 5)) == 0
+
+    assert monday_fetcher.recent_listing_calls == []
+    assert "Snapshotted Friday Paper" in (config.daily_notes_dir / "2026-10-05.md").read_text(encoding="utf-8")
+    assert StateStore(config).load_completed_announcement_date() == date(2026, 10, 2)
+
+
+def test_pipeline_fatal_listing_failure_names_the_outstanding_day_to_recover(tmp_path: Path, monkeypatch) -> None:
+    # Monday with an empty feed and every /list copy rejected: fail loudly with the
+    # recovery command and leave the marker for the next run.
+    config = make_app_config(tmp_path, shift_announcements_to_next_weekday=True)
+    StateStore(config).save_completed_announcement_date(date(2026, 10, 1))
+    fetcher = FakeFetcher([], feed_dates=(), recent_listing_ok=False)
+    _patch_pipeline(monkeypatch, fetcher)
+
+    assert run(config, date(2026, 10, 5)) == 1
+
+    fatal = json.loads(next(config.state_runs_dir.glob("*overall-fatal*.json")).read_text(encoding="utf-8"))
+    assert "uv run re-ass --date 2026-10-02" in fatal["fatal_error"]
+    assert StateStore(config).load_completed_announcement_date() == date(2026, 10, 1)

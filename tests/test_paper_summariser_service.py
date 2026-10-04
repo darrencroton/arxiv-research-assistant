@@ -1,12 +1,15 @@
+import email.message
 import logging
 import os
 from pathlib import Path
 import sys
 import types
+from urllib.error import HTTPError
 
 import pytest
 
 import re_ass.paper_summariser.service as paper_service
+from re_ass.arxiv_rate_limit import USER_AGENT, ArxivResponse, ArxivTransferError
 from re_ass.paper_summariser.providers.base import Provider
 from re_ass.paper_summariser.service import (
     GLOSSARY_MAX_TERMS,
@@ -776,87 +779,116 @@ def test_build_pdf_url_rejects_an_unsupported_path_shape() -> None:
         build_pdf_url("https://arxiv.org/list/astro-ph.GA/pastweek")
 
 
-class _FakePdfResponse:
-    """Mimics HTTPResponse.read(n) possibly returning the body in parts,
-    followed by an empty read at EOF -- the exact behaviour the drain loop
-    in download_arxiv_pdf has to handle correctly."""
+def _pdf_response(payload: bytes, *, content_length: int | None = None) -> ArxivResponse:
+    """Stands in for fetch_arxiv_url's result for a PDF, optionally promising a Content-Length."""
+    headers = email.message.Message()
+    headers["Content-Length"] = str(len(payload) if content_length is None else content_length)
+    return ArxivResponse(200, headers, payload)
 
-    def __init__(self, chunks: list[bytes], content_length: int) -> None:
-        self._chunks = list(chunks)
-        self._content_length = content_length
 
-    def __enter__(self):
-        return self
+def _patch_fetch(monkeypatch: pytest.MonkeyPatch, outcome) -> list[dict]:
+    """Patch fetch_arxiv_url with `outcome` (a response, or an exception to raise); returns the call log."""
+    calls: list[dict] = []
 
-    def __exit__(self, *args):
-        return None
+    def fake_fetch(url, *, headers, timeout, max_bytes=None):
+        calls.append({"url": url, "headers": headers, "timeout": timeout, "max_bytes": max_bytes})
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
 
-    def read(self, _amt: int) -> bytes:
-        return self._chunks.pop(0) if self._chunks else b""
-
-    def getheader(self, name: str) -> str | None:
-        return str(self._content_length) if name == "Content-Length" else None
+    monkeypatch.setattr(paper_service, "fetch_arxiv_url", fake_fetch)
+    return calls
 
 
 def test_download_arxiv_pdf_succeeds_when_payload_matches_content_length(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     payload = b"%PDF-1.7\n...full content...\n%%EOF"
-    monkeypatch.setattr(
-        paper_service, "urlopen", lambda *_args, **_kwargs: _FakePdfResponse([payload], len(payload))
-    )
+    calls = _patch_fetch(monkeypatch, _pdf_response(payload))
+    config = make_app_config(tmp_path).llm
 
-    path = download_arxiv_pdf(make_paper(arxiv_id="2609.12060"), tmp_path, make_app_config(tmp_path).llm)
+    path = download_arxiv_pdf(make_paper(arxiv_id="2609.12060"), tmp_path, config)
 
     assert path.read_bytes() == payload
-
-
-def test_download_arxiv_pdf_drains_a_response_delivered_in_multiple_parts(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # HTTPResponse.read(n) is not guaranteed to return n bytes in one call;
-    # a real response can arrive in several reads even though none of them
-    # is empty until the true end of the stream.
-    parts = [b"%PDF-1.7\n", b"...middle content...\n", b"%%EOF"]
-    full_payload = b"".join(parts)
-    monkeypatch.setattr(
-        paper_service, "urlopen", lambda *_args, **_kwargs: _FakePdfResponse(parts, len(full_payload))
-    )
-
-    path = download_arxiv_pdf(make_paper(arxiv_id="2609.12060"), tmp_path, make_app_config(tmp_path).llm)
-
-    assert path.read_bytes() == full_payload
+    assert calls[0]["url"].startswith("https://export.arxiv.org/pdf/2609.12060")
+    assert calls[0]["headers"] == {"User-Agent": USER_AGENT}
+    assert calls[0]["timeout"] == config.download_timeout_seconds
+    assert calls[0]["max_bytes"] == config.max_pdf_size_mb * 1024 * 1024
 
 
 def test_download_arxiv_pdf_raises_when_response_is_shorter_than_content_length(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     truncated_payload = b"%PDF-1.7\n...only part of the file..."
-    monkeypatch.setattr(
-        paper_service,
-        "urlopen",
-        lambda *_args, **_kwargs: _FakePdfResponse([truncated_payload], len(truncated_payload) + 1_000_000),
+    _patch_fetch(
+        monkeypatch, _pdf_response(truncated_payload, content_length=len(truncated_payload) + 1_000_000)
     )
 
     with pytest.raises(PdfDownloadTruncatedError, match="truncated"):
         download_arxiv_pdf(make_paper(arxiv_id="2609.12060"), tmp_path, make_app_config(tmp_path).llm)
 
 
-def test_download_arxiv_pdf_converts_incomplete_read_to_truncated_error(
+def test_download_arxiv_pdf_maps_curl_partial_file_to_truncated_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from http.client import IncompleteRead
-
-    class _RaisingResponse(_FakePdfResponse):
-        def read(self, _amt: int) -> bytes:
-            raise IncompleteRead(b"partial-bytes", 100)
-
-    monkeypatch.setattr(
-        paper_service, "urlopen", lambda *_args, **_kwargs: _RaisingResponse([], 113)
+    _patch_fetch(
+        monkeypatch,
+        ArxivTransferError("curl exited 18 fetching x: transfer closed with 100 bytes remaining", 18),
     )
 
-    with pytest.raises(PdfDownloadTruncatedError, match="got 13 of 113 expected bytes"):
+    with pytest.raises(PdfDownloadTruncatedError, match="truncated.*transfer closed with 100 bytes remaining"):
         download_arxiv_pdf(make_paper(arxiv_id="2609.12060"), tmp_path, make_app_config(tmp_path).llm)
+
+
+def test_download_arxiv_pdf_maps_curl_maxfilesize_to_size_limit_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_fetch(monkeypatch, ArxivTransferError("curl exited 63: Maximum file size exceeded", 63))
+    config = make_app_config(tmp_path).llm
+
+    with pytest.raises(PaperSummariserError, match=rf"exceeds {config.max_pdf_size_mb}MB limit") as excinfo:
+        download_arxiv_pdf(make_paper(arxiv_id="2609.12060"), tmp_path, config)
+
+    assert not isinstance(excinfo.value, PdfDownloadTruncatedError)
+
+
+def test_download_arxiv_pdf_reports_other_transfer_errors_as_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_fetch(monkeypatch, ArxivTransferError("curl exited 28: Operation timed out", 28))
+
+    with pytest.raises(PaperSummariserError, match="failed: curl exited 28") as excinfo:
+        download_arxiv_pdf(make_paper(arxiv_id="2609.12060"), tmp_path, make_app_config(tmp_path).llm)
+
+    assert not isinstance(excinfo.value, PdfDownloadTruncatedError)
+
+
+def test_download_arxiv_pdf_reports_http_status(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_fetch(
+        monkeypatch, HTTPError("https://export.arxiv.org/pdf/2609.12060", 404, "Not Found", None, None)
+    )
+
+    with pytest.raises(PaperSummariserError, match="returned HTTP 404") as excinfo:
+        download_arxiv_pdf(make_paper(arxiv_id="2609.12060"), tmp_path, make_app_config(tmp_path).llm)
+
+    assert isinstance(excinfo.value.__cause__, HTTPError)
+
+
+def test_download_arxiv_pdf_rejects_empty_and_oversized_payloads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = make_app_config(tmp_path).llm
+    paper = make_paper(arxiv_id="2609.12060")
+
+    _patch_fetch(monkeypatch, _pdf_response(b"", content_length=0))
+    with pytest.raises(PaperSummariserError, match="returned no content"):
+        download_arxiv_pdf(paper, tmp_path, config)
+
+    # No Content-Length and no curl cap (chunked reply): the post-hoc size check still applies.
+    oversized = ArxivResponse(200, email.message.Message(), b"x" * (config.max_pdf_size_mb * 1024 * 1024 + 1))
+    _patch_fetch(monkeypatch, oversized)
+    with pytest.raises(PaperSummariserError, match=rf"exceeds {config.max_pdf_size_mb}MB limit"):
+        download_arxiv_pdf(paper, tmp_path, config)
 
 
 class _ScriptedProvider(Provider):

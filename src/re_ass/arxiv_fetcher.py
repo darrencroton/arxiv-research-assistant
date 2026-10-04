@@ -3,7 +3,8 @@ fill) and per-paper metadata collection for re-ass."""
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from collections.abc import Callable
+from datetime import date, datetime, time as clock_time, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from html import unescape
 from html.parser import HTMLParser
@@ -14,7 +15,7 @@ from typing import Any
 import re
 import xml.etree.ElementTree as ET
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from zoneinfo import ZoneInfo
 import zlib
 
 import arxiv
@@ -25,6 +26,7 @@ from re_ass.arxiv_rate_limit import (
     RETRY_DELAYS_SECONDS,
     decode_response_text,
     describe_http_error,
+    fetch_arxiv_url,
     get_shared_limiter,
     is_transient_http_status,
 )
@@ -36,21 +38,30 @@ LOGGER = logging.getLogger(__name__)
 _ANNOUNCEMENT_HEADING_RE = re.compile(r"^(?P<label>[A-Za-z]{3}, \d{1,2} [A-Za-z]{3} \d{4})")
 _CATEGORY_CODE_RE = re.compile(r"\((?P<code>[A-Za-z0-9.-]+)\)")
 _RECENT_PAGE_SIZE = 2000
-# export.arxiv.org is arXiv's programmatic-access host and has not shown the main site's 406
-# windows, but its copy can lag for the newest day (hence the staleness check); arxiv.org is the fallback.
+# export.arxiv.org is arXiv's programmatic-access host, so it is tried first; arxiv.org is the
+# second host. Either host's /list page can be served from a CDN cache entry that predates
+# later announcements (export was observed at Age 512,239 s, 6 days, with no Cache-Control),
+# so staleness is judged on content, in _fetch_recent_listing: the newest day shown against
+# the days needed and the expected newest day. The Age header is no guide on its own: over a
+# weekend a correct page is legitimately 2-3 days old. (The 406s seen since Sep 2026 were the
+# CDN refusing urllib, which the curl transport in arxiv_rate_limit avoids.)
 _RECENT_LISTING_HOSTS = ("export.arxiv.org", "arxiv.org")
+# arXiv announces day D at 20:00 US Eastern on the evening before D.
+_ANNOUNCEMENT_ZONE = ZoneInfo("America/New_York")
+_ANNOUNCEMENT_TIME = clock_time(20, 0)
 _RSS_ARXIV_NS = "{http://arxiv.org/schemas/atom}"
 _RSS_LISTED_ANNOUNCE_TYPES = frozenset({"new", "cross"})
 _SUBMITTED_DATE_RE = re.compile(r"\[Submitted on (?P<label>\d{1,2} [A-Za-z]{3} \d{4})")
 _WHITESPACE_RE = re.compile(r"\s+")
 
-# What self._fetch_text (urlopen + decode_response_text) can raise: HTTPError is a
-# URLError/OSError subclass so it's covered; TimeoutError/socket errors and
-# gzip.BadGzipFile are OSError subclasses; UnicodeDecodeError is a ValueError
-# subclass; zlib.error is the one decompression error outside that hierarchy;
-# http.client.HTTPException (IncompleteRead, BadStatusLine, ...) is raised by
-# the underlying http.client machinery on a malformed/truncated response and
-# is not an OSError subclass, so it's listed explicitly.
+# What self._fetch_text (fetch_arxiv_url + decode_response_text) can raise:
+# HTTPError (non-2xx) and ArxivTransferError (curl failure or timeout) are
+# URLError/OSError subclasses so they're covered, as are the urllib fallback's
+# socket errors; gzip.BadGzipFile is an OSError subclass; UnicodeDecodeError
+# is a ValueError subclass; zlib.error is the one
+# decompression error outside that hierarchy; http.client.HTTPException is
+# listed explicitly because it is not an OSError subclass and the urllib
+# fallback's http.client machinery can raise it on a malformed response.
 _ARXIV_SOURCE_ERRORS = (URLError, OSError, ValueError, zlib.error, http.client.HTTPException)
 
 
@@ -120,6 +131,28 @@ def _merge_listing(base: dict[date, list[str]], extra: dict[date, list[str]]) ->
                 existing.append(source_id)
                 seen.add(source_id)
     return merged
+
+
+def _announcement_instant(announcement_date: date) -> datetime:
+    """When announcement_date's listing went out: 20:00 US Eastern the evening before."""
+    return datetime.combine(
+        announcement_date - timedelta(days=1), _ANNOUNCEMENT_TIME, tzinfo=_ANNOUNCEMENT_ZONE
+    )
+
+
+def _cached_at(response: Any, fetched_at: datetime) -> datetime | None:
+    """When the CDN cached this response: fetched_at minus its Age header.
+
+    None when Age is missing or malformed. arXiv's CDN sends Age on every
+    response, even a cache miss (Age 0), so a missing one is unknown
+    freshness, not a live fetch; the Date header is no substitute, since the
+    CDN stamps it with the current time even on a days-old copy.
+    """
+    try:
+        age = int(response.getheader("Age"))
+    except (TypeError, ValueError):
+        return None
+    return fetched_at - timedelta(seconds=max(age, 0))
 
 
 def _ensure_utc(value: datetime) -> datetime:
@@ -364,6 +397,7 @@ class ArxivFetcher:
         abstract_fetcher: Any | None = None,
         feed_fetcher: Any | None = None,
         rate_limiter: ArxivRateLimiter | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.page_size = max(1, min(page_size, 100))
         self.client = client or arxiv.Client(page_size=self.page_size, num_retries=3, delay_seconds=3)
@@ -372,26 +406,38 @@ class ArxivFetcher:
         self._feed_fetcher = feed_fetcher or self._fetch_rss_xml
         self._listing_cache: dict[str, dict[date, list[str]]] = {}
         self._rate_limiter = rate_limiter or get_shared_limiter()
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
+        # When each (category, host) /list page the default fetcher returned was
+        # cached by arXiv's CDN (None: unknown). Absent for injected fetchers,
+        # which are treated as live.
+        self._listing_cached_at: dict[tuple[str, str], datetime | None] = {}
 
     def _fetch_text(self, url: str, *, label: str) -> str:
-        """Shared retry loop for arXiv HTML/XML GETs.
+        return self._fetch_text_and_response(url, label=label)[0]
 
-        Waits on the shared crawl-delay limiter, sends DEFAULT_HEADERS, and
-        decodes the response body. On a transient HTTP status it logs a
-        WARNING and sleeps per RETRY_DELAYS_SECONDS; the HTTPError is
-        re-raised once that schedule is exhausted or immediately for a
-        non-transient status. Severity of the eventual failure is the
-        caller's call, not logged here.
+    def _fetch_text_and_response(self, url: str, *, label: str) -> tuple[str, Any]:
+        """Shared retry loop for arXiv HTML/XML GETs; returns the text and the response.
+
+        Waits on the shared crawl-delay limiter, fetches with
+        fetch_arxiv_url (curl) sending DEFAULT_HEADERS, and decodes the
+        response body. On a transient HTTP status it logs a WARNING and
+        sleeps per RETRY_DELAYS_SECONDS; the HTTPError is re-raised once that
+        schedule is exhausted or immediately for a non-transient status.
+        Severity of the eventual failure is the caller's call, not logged
+        here.
         """
-        request = Request(url, headers=dict(DEFAULT_HEADERS))
         delays = list(RETRY_DELAYS_SECONDS)
         for attempt, delay in enumerate(delays + [None], start=1):
             self._rate_limiter.wait_for_crawl_delay()
             try:
-                with urlopen(request, timeout=60) as response:
-                    text = decode_response_text(response)
+                # Every attempt counts against the crawl delay, including one
+                # that fails below the HTTP level (curl error or timeout).
+                try:
+                    response = fetch_arxiv_url(url, headers=DEFAULT_HEADERS, timeout=60)
+                finally:
+                    self._rate_limiter.mark_request_completed()
+                text = decode_response_text(response)
             except HTTPError as exc:
-                self._rate_limiter.mark_request_completed()
                 detail = describe_http_error(exc)
                 if not is_transient_http_status(exc.code) or delay is None:
                     raise
@@ -401,14 +447,16 @@ class ArxivFetcher:
                 )
                 time.sleep(delay)
             else:
-                self._rate_limiter.mark_request_completed()
-                return text
+                return text, response
         raise RuntimeError("unreachable")
 
     def _fetch_listing_html(self, category: str, host: str) -> str:
-        return self._fetch_text(
-            _recent_listing_url(category, host), label=f"recent listing for {category} from {host}"
+        text, response = self._fetch_text_and_response(
+            _recent_listing_url(category, host),
+            label=f"recent listing for {category} from {host}",
         )
+        self._listing_cached_at[(category, host)] = _cached_at(response, self._clock())
+        return text
 
     def _fetch_rss_xml(self, categories: tuple[str, ...]) -> str:
         return self._fetch_text(_rss_feed_url(categories), label=f"announcement feed for {'+'.join(categories)}")
@@ -417,11 +465,9 @@ class ArxivFetcher:
         # export.arxiv.org mirrors individual /abs pages promptly and is arXiv's site
         # "specifically set aside for programmatic access" (see AGENTS.md).
         url = f"https://export.arxiv.org/abs/{source_id}"
-        request = Request(url, headers=dict(DEFAULT_HEADERS))
         self._rate_limiter.wait_for_crawl_delay()
         try:
-            with urlopen(request, timeout=60) as response:
-                return decode_response_text(response)
+            return decode_response_text(fetch_arxiv_url(url, headers=DEFAULT_HEADERS, timeout=60))
         finally:
             self._rate_limiter.mark_request_completed()
 
@@ -470,7 +516,10 @@ class ArxivFetcher:
         }
 
     def _fetch_recent_listing(
-        self, category: str, required_dates: tuple[date, ...]
+        self,
+        category: str,
+        required_dates: tuple[date, ...],
+        expected_latest: date | None = None,
     ) -> dict[date, list[str]] | None:
         """First acceptable /list page for one category across the hosts, or None.
 
@@ -479,9 +528,22 @@ class ArxivFetcher:
         older than the newest date needed, i.e. the mirror is not stale. The
         test is the newest listed day rather than presence of a needed day
         because a category can legitimately have no papers on a day.
+
+        expected_latest is a soft freshness hint: the announcement day the
+        caller expects to be the newest by now. A page older than it moves on
+        to the next host. Whether it may still be used depends on when the CDN
+        cached it (fetch time minus its Age header): a copy cached before
+        expected_latest was announced is stale and is never used, since it
+        cannot say whether this category had papers that day; one cached after
+        it is authoritative that the category listed nothing that day (or that
+        it was an arXiv holiday), so the freshest such page is used and the
+        caller is left to warn if every category is behind. With no such page
+        the category has no acceptable host.
         """
+        freshest: dict[date, list[str]] | None = None
         for host in _RECENT_LISTING_HOSTS:
             url = _recent_listing_url(category, host)
+            self._listing_cached_at.pop((category, host), None)
             try:
                 parser = _AnnouncementListingParser()
                 parser.feed(self._listing_fetcher(category, host))
@@ -505,17 +567,48 @@ class ArxivFetcher:
                     max(required_dates).isoformat(),
                 )
                 continue
-            return listing
-        return None
+            if expected_latest is None or max(listing) >= expected_latest:
+                return listing
+            if (category, host) in self._listing_cached_at:
+                cached_at = self._listing_cached_at[(category, host)]
+                if cached_at is None or cached_at < _announcement_instant(expected_latest):
+                    LOGGER.warning(
+                        "Recent-listing fallback for %s (%s) is a cached copy from %s, which may predate "
+                        "%s's announcement; treating it as stale.",
+                        category,
+                        url,
+                        "an unknown time (no Age header)"
+                        if cached_at is None
+                        else cached_at.astimezone(timezone.utc).isoformat(timespec="minutes"),
+                        expected_latest.isoformat(),
+                    )
+                    continue
+            # INFO, not WARNING: a category can have no papers on a day, and the
+            # pipeline warns once if the merged listing is still behind.
+            LOGGER.info(
+                "Recent-listing fallback for %s (%s) shows %s as its newest day, behind the expected %s.",
+                category,
+                url,
+                max(listing).isoformat(),
+                expected_latest.isoformat(),
+            )
+            if freshest is None or max(listing) > max(freshest):
+                freshest = listing
+        return freshest
 
     def load_recent_listings(
-        self, categories: tuple[str, ...], required_dates: tuple[date, ...] = ()
+        self,
+        categories: tuple[str, ...],
+        required_dates: tuple[date, ...] = (),
+        *,
+        expected_latest: date | None = None,
     ) -> tuple[date, ...]:
         """Fetch /list/{category}/pastweek for every category and merge it into the cache.
 
         Each category tries export.arxiv.org then arxiv.org (see
         _fetch_recent_listing; required_dates are the days the caller needs,
-        empty when none are known). Returns the sorted announcement days the
+        empty when none are known, and expected_latest is the soft freshness
+        hint for the newest day). Returns the sorted announcement days the
         accepted pages showed, so the caller can tell which days the window
         covered. All-or-nothing across categories: if any category has no
         acceptable host, nothing is merged and () is returned (each rejected
@@ -523,7 +616,7 @@ class ArxivFetcher:
         """
         fetched: dict[str, dict[date, list[str]]] = {}
         for category in categories:
-            listing = self._fetch_recent_listing(category, required_dates)
+            listing = self._fetch_recent_listing(category, required_dates, expected_latest)
             if listing is None:
                 return ()
             fetched[category] = listing

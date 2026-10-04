@@ -187,6 +187,8 @@ def _run_summary_base(invocation_date: date, llm_stamp: dict[str, object] | None
         "snapshot_announcement_dates": [],
         "listing_gap_dates": [],
         "listing_gap_fallback": None,
+        "expected_latest_announcement_date": None,
+        "listing_behind_expected": False,
         "visible_window_start": None,
         "visible_window_end": None,
         "candidate_count": 0,
@@ -265,6 +267,20 @@ def _next_weekday(day: date) -> date:
 def _backfill_note_date(config: AppConfig, announcement_date: date) -> date:
     """Note date a standard run would have used for this announcement day."""
     return _next_weekday(announcement_date) if config.shift_announcements_to_next_weekday else announcement_date
+
+
+def _expected_latest_announcement_date(invocation_date: date) -> date:
+    """Newest announcement day a listing must show for a run on invocation_date.
+
+    arXiv announces day D at 20:00 US Eastern on the evening before D, which
+    is before local day D+1 begins in every timezone, so the latest weekday
+    before the invocation date is always out (Friday for a weekend or Monday
+    run). It is a lower bound: a run late on D may already see D itself.
+    """
+    candidate = invocation_date - timedelta(days=1)
+    while candidate.weekday() >= 5:
+        candidate -= timedelta(days=1)
+    return candidate
 
 
 def _listing_gap_dates(
@@ -374,6 +390,22 @@ def _warn_unfilled_listing_gap(gap_dates: list[date]) -> None:
         gap_dates[0].isoformat(),
         gap_dates[-1].isoformat(),
         commands,
+    )
+
+
+def _warn_listing_behind_expected(expected_date: date, newest_listed_date: date | None) -> None:
+    newest = newest_listed_date.isoformat() if newest_listed_date is not None else "none"
+    LOGGER.warning(
+        "Announcement day %s should already be announced, but the newest day any listing source "
+        "showed is %s. Either %s was an arXiv holiday, or every source was stale (the RSS feed is "
+        "empty on weekends and a recent listing can be served from a days-old CDN cache entry). The "
+        "completed-announcement marker stays before %s, so the next run retries it. To recover it "
+        "now, run:\n  uv run re-ass --date %s",
+        expected_date.isoformat(),
+        newest,
+        expected_date.isoformat(),
+        expected_date.isoformat(),
+        expected_date.isoformat(),
     )
 
 
@@ -758,6 +790,14 @@ def run(
         _save_listing_snapshots(state_store, fetcher, preferences.categories, feed_dates, source="rss")
         backfill_date = invocation_date if backfill else None
         listed_dates = snapshot_dates | set(feed_dates)
+        # The newest day this run should see, while it is still outstanding;
+        # None for a backfill or once the marker has reached it.
+        expected_latest_date = None
+        if not backfill:
+            expected_latest_date = _expected_latest_announcement_date(invocation_date)
+            marker = last_completed_announcement_date
+            if marker is not None and expected_latest_date <= marker:
+                expected_latest_date = None
         gap_dates = _listing_gap_dates(
             listed_dates,
             last_completed_announcement_date=last_completed_announcement_date,
@@ -765,20 +805,37 @@ def run(
         )
 
         # RSS alone can't answer a gap or a wholly unusable feed; /list is the
-        # gap-fill path for both. A backfill only needs /list for a date nothing
-        # lists yet, and otherwise the feed day is enough on its own.
-        gap_fallback_ran = bool(gap_dates) or (not backfill and not feed_dates)
+        # gap-fill path for both. The feed is empty every weekend, so a Monday
+        # run with no saved snapshot of Friday reaches /list this way. A
+        # backfill only needs /list for a date nothing lists yet, and otherwise
+        # the feed day is enough on its own. An empty feed needs no /list either
+        # when a snapshot already holds the expected newest day.
+        expected_is_listed = expected_latest_date is not None and expected_latest_date in listed_dates
+        gap_fallback_ran = bool(gap_dates) or (not backfill and not feed_dates and not expected_is_listed)
         # The announcement days the fallback's pages showed; () when it failed.
         recent_listing_dates = (
-            fetcher.load_recent_listings(preferences.categories, tuple(gap_dates)) if gap_fallback_ran else None
+            fetcher.load_recent_listings(
+                preferences.categories,
+                tuple(gap_dates),
+                expected_latest=None if expected_is_listed else expected_latest_date,
+            )
+            if gap_fallback_ran
+            else None
         )
 
         available_dates = list(fetcher.available_announcement_dates(preferences.categories))
         _save_listing_snapshots(state_store, fetcher, preferences.categories, recent_listing_dates or (), source="list")
         if not backfill and not available_dates:
+            recovery = (
+                f" Announcement day {expected_latest_date.isoformat()} is still outstanding; the "
+                "completed-announcement marker is unchanged, so the next run retries it. To recover it "
+                f"now, run: uv run re-ass --date {expected_latest_date.isoformat()}"
+                if expected_latest_date is not None
+                else ""
+            )
             raise RuntimeError(
                 f"No announcement listing available: the arXiv RSS feed for {', '.join(preferences.categories)} "
-                "was unusable and the recent-listing fallback failed."
+                "was unusable and the recent-listing fallback failed." + recovery
             )
 
         # A gap day older than the window the fallback's pages showed was never covered;
@@ -789,15 +846,34 @@ def run(
             window_start = min(recent_listing_dates, default=None)
             unfilled_gap_dates = [day for day in gap_dates if window_start is None or day < window_start]
 
+        # Every source together still stops short of a day that must be out by
+        # now: a stale mirror or an arXiv holiday. Never let that pass silently.
+        newest_listed_date = max(available_dates, default=None)
+        listing_behind_expected = expected_latest_date is not None and (
+            newest_listed_date is None or newest_listed_date < expected_latest_date
+        )
+        if recent_listing_dates is None:
+            gap_fallback_outcome = "not_needed"
+        elif not recent_listing_dates:
+            gap_fallback_outcome = "failed"
+        elif listing_behind_expected:
+            gap_fallback_outcome = "stale"
+        else:
+            gap_fallback_outcome = "filled"
+
         listing_summary: dict[str, object] = {
             "feed_announcement_dates": [day.isoformat() for day in feed_dates],
             "snapshot_announcement_dates": [day.isoformat() for day in sorted(snapshot_dates)],
             "listing_gap_dates": [day.isoformat() for day in gap_dates],
-            "listing_gap_fallback": (
-                "not_needed" if recent_listing_dates is None else ("filled" if recent_listing_dates else "failed")
+            "listing_gap_fallback": gap_fallback_outcome,
+            "expected_latest_announcement_date": (
+                expected_latest_date.isoformat() if expected_latest_date is not None else None
             ),
+            "listing_behind_expected": listing_behind_expected,
         }
         overall_summary.update(listing_summary)
+        if listing_behind_expected:
+            _warn_listing_behind_expected(expected_latest_date, newest_listed_date)
 
         if backfill:
             pending_dates = [invocation_date]

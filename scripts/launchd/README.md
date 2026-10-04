@@ -89,6 +89,18 @@ Replace that block with:
 
 `Hour` uses 24-hour format (0–23), so 1:00 PM = `13`, 9:00 AM = `9`, midnight = `0`.
 
+### Weekday-only schedules: add a Saturday run
+
+arXiv's RSS feed only carries the current announcement day, and it is empty on US Saturdays and Sundays. Friday's announcement is therefore only in the feed for one US day (Friday, midnight to midnight US Eastern; Friday afternoon to Saturday afternoon in Australia). If no run happens in that window, the following Monday's run must recover Friday from arXiv's `/list` recent-listing page, which is a secondary path (`export.arxiv.org`'s `/list` can be served from a days-old CDN cache entry; `re-ass` detects a page whose newest day is behind the day it needs and falls through to `arxiv.org`, but the RSS feed remains the robust source, so a Saturday run, which snapshots Friday from the feed, is still the robust option).
+
+If you schedule weekdays only, also add a Saturday entry, in Australia at the same morning hour as the weekday runs:
+
+```xml
+    <dict><key>Weekday</key><integer>6</integer><key>Hour</key><integer>4</integer><key>Minute</key><integer>0</integer></dict>
+```
+
+With `[notes].shift_announcements_to_next_weekday = true` (the default), Friday's announcement belongs on Monday's note, so the Saturday run writes no notes and does not advance the completed-announcement marker. It only saves Friday's listing to `state/listings/`, and Monday's run then processes Friday from that snapshot without any `/list` request. The default every-day schedule already covers this.
+
 `launchd` weekday numbers are:
 
 - `1`: Monday
@@ -148,6 +160,7 @@ state/papers/
 - If your Mac is asleep when a run is due, `launchd` coalesces missed calendar events and runs the job after wake.
 - `re-ass` tracks the last completed arXiv announcement day, so scheduled runs pick up the next visible announcement batch instead of relying on a rolling time window.
 - `re-ass` assigns catch-up batches across weekday daily notes, skipping weekends, which matches the intended morning-reading workflow for weekday automation.
+- If no listing source shows the announcement day that should already be out (for example, a Monday run whose `/list` fallback only showed stale cached pages), the run logs a WARNING with the `uv run re-ass --date ...` recovery command and records `"listing_gap_fallback": "stale"` and `"listing_behind_expected": true` in its `state/runs/` summary. It does not silently report "nothing new". The marker stays put, so the next run retries that day. If no listing source is usable at all (an empty feed and every `/list` copy failed or was rejected as cached before that day's announcement), the run instead exits 1 with the same recovery command in its error and `state/runs/` fatal summary, again leaving the marker unchanged.
 - Early-morning schedules are safe, but they can lag behind arXiv's local availability time. That means `re-ass` may process the previous visible announcement day and catch up on the next scheduled run.
 - If you reinstall or move the provider CLI binary, or your PATH changes, rerun `./scripts/launchd/render-plist.sh` and reinstall the LaunchAgent so the updated PATH is captured.
 
