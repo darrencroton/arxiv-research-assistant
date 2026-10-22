@@ -20,6 +20,11 @@ _VALID_ROTATION_DAYS = (
     "sunday",
 )
 _VALID_LLM_EFFORTS = ("low", "medium", "high")
+# (min_summarize_score, min_selection_score) for [llm-ranking].mode = "decisions"
+# when [llm-ranking] sets neither. Decisions scores sit lower than text-ranker
+# scores; over six announcement days (391 papers) these values matched the text
+# rankers' daily picks (17 vs 16) and picks plus weekly interest (96 vs 96).
+DECISIONS_DEFAULT_THRESHOLDS = (70.0, 50.0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,7 +60,7 @@ class LlmConfig:
             config["max_prompt_chars"] = self.max_prompt_chars
         if self.mode == "cli" and self.effort:
             config["effort"] = self.effort
-        if self.provider == "openai-compatible":
+        if self.provider == "openai-compatible" or self.mode == "decisions":
             if self.base_url:
                 config["base_url"] = self.base_url
             if self.api_key_env:
@@ -240,6 +245,44 @@ def _parse_llm_config(data: dict[str, object], section: str, root: Path) -> LlmC
     )
 
 
+def _ranking_thresholds(
+    ranking_raw: dict[str, object],
+    ranking_llm: LlmConfig,
+    arxiv_thresholds: tuple[float, float],
+) -> tuple[float, float]:
+    """Resolve (min_summarize_score, min_selection_score) for ranking.
+
+    Text-generating modes always use the `[arxiv]` values. Decisions mode uses
+    `[llm-ranking]` values when set, else its calibrated defaults, because its
+    scores sit lower on the 0-100 scale than the text ranker's.
+    """
+    keys = ("min_summarize_score", "min_selection_score")
+    if ranking_llm.mode != "decisions":
+        misplaced = [key for key in keys if key in ranking_raw]
+        if misplaced:
+            raise ValueError(
+                f"Setting [llm-ranking].{misplaced[0]} applies only to mode = \"decisions\"; "
+                f"use [arxiv].{misplaced[0]} for mode = \"{ranking_llm.mode}\"."
+            )
+        return arxiv_thresholds
+    resolved = []
+    for key, default in zip(keys, DECISIONS_DEFAULT_THRESHOLDS):
+        raw_value = ranking_raw.get(key, default)
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"Setting [llm-ranking].{key} must be a number from 0 to 100.") from error
+        if not 0.0 <= value <= 100.0:
+            raise ValueError(f"Setting [llm-ranking].{key} must be a number from 0 to 100, got {value}.")
+        resolved.append(value)
+    if resolved[0] < resolved[1]:
+        raise ValueError(
+            f"Ranking min_summarize_score ({resolved[0]}) must be greater than or equal to "
+            f"min_selection_score ({resolved[1]}); check [llm-ranking] and [arxiv]."
+        )
+    return resolved[0], resolved[1]
+
+
 def load_config(config_path: Path | None = None, project_root: Path | None = None) -> AppConfig:
     """Load and validate application configuration from settings.toml."""
     root = (project_root or _default_project_root()).resolve()
@@ -359,6 +402,7 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
             "Setting [arxiv].min_summarize_score must be greater than or equal to "
             "[arxiv].min_selection_score."
         )
+    arxiv_thresholds = (min_summarize_score, min_selection_score)
     max_summarized_papers = _positive_int(
         arxiv_data, "max_summarized_papers", "arxiv", default=3
     )
@@ -367,6 +411,12 @@ def load_config(config_path: Path | None = None, project_root: Path | None = Non
     llm = _parse_llm_config(llm_data, "llm", root)
     ranking_llm = _parse_llm_config({**llm_data, **ranking_raw}, "llm-ranking", root) if ranking_raw else llm
     summary_llm = _parse_llm_config({**llm_data, **summary_raw}, "llm-summary", root) if summary_raw else llm
+    if summary_llm.mode == "decisions":
+        raise ValueError(
+            'LLM mode "decisions" returns scores, not text, so it cannot summarise papers. '
+            "Set it only in [llm-ranking] and keep a text-generating mode for [llm] or [llm-summary]."
+        )
+    min_summarize_score, min_selection_score = _ranking_thresholds(ranking_raw, ranking_llm, arxiv_thresholds)
 
     return AppConfig(
         output_root=output_root,

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import json
 import logging
 import time
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 from re_ass.llm_retry import is_retryable_llm_error, retry_delay_seconds
 from re_ass.models import ArxivPaper, PreferenceConfig
@@ -17,6 +18,7 @@ from re_ass.settings import LlmConfig
 
 
 LOGGER = logging.getLogger(__name__)
+T = TypeVar("T")
 _RANKING_RETRY_WAIT_SECONDS = 2
 _MIN_RANKING_VALIDATION_ATTEMPTS = 4
 _MIN_RECOVERY_BATCH_SIZE = 10
@@ -26,6 +28,10 @@ _TOP_UP_THRESHOLD = 2
 # Minimum finalist pool size to justify a re-rank pass; below this the pool is
 # too small for cross-batch calibration to add signal.
 _FINALIST_RERANK_MIN_POOL = 10
+# Decisions mode ([llm-ranking].mode = "decisions") scores each paper in its own
+# request, a few at a time. A predicate counts as a match at this probability.
+_DECISIONS_MAX_WORKERS = 8
+_DECISIONS_MATCH_PROBABILITY = 0.5
 
 
 class RankingError(RuntimeError):
@@ -408,6 +414,149 @@ def _parse_ranked_payload(
     return [item for _position, item in ranked]
 
 
+def _decisions_levels(*, dual_match: bool) -> list[dict[str, str]]:
+    """Ordered relevance levels for the Decisions API, lowest first.
+
+    The API's score is the probability-weighted level index, so with five levels
+    `index * 25` maps onto the same 0-100 scale as the text ranker's scoring guide.
+    """
+    if dual_match:
+        return [
+            {"label": "No fit", "description": "No clear match to any science or method priority."},
+            {"label": "Weak fit", "description": "Only a loose or incidental connection to one priority."},
+            {
+                "label": "Partial fit",
+                "description": "An adjacent or indirect match, or a clear match on only one of the science and method lists.",
+            },
+            {
+                "label": "Relevant",
+                "description": "A lower-confidence match on both lists, or an important match on one list; worth a weekly mention.",
+            },
+            {
+                "label": "Top fit",
+                "description": "A clear science match and a clear method match to high-ranked priorities; deserves one of the day's top 1-3 summary slots.",
+            },
+        ]
+    return [
+        {"label": "No fit", "description": "No meaningful connection to any priority."},
+        {"label": "Weak fit", "description": "Only a loose or incidental connection to a priority."},
+        {"label": "Partial fit", "description": "Adjacent to a priority, or matches it only indirectly."},
+        {
+            "label": "Relevant",
+            "description": "Directly relevant to a priority and worth a weekly mention, but not one of the day's best papers.",
+        },
+        {
+            "label": "Top fit",
+            "description": "An exceptionally strong direct fit to a priority, especially a higher-ranked one; deserves one of the day's top 1-3 summary slots.",
+        },
+    ]
+
+
+def _decisions_questions(*, dual_match: bool) -> list[dict[str, Any]]:
+    questions: list[dict[str, Any]] = [
+        {
+            "type": "score",
+            "name": "relevance",
+            "instructions": (
+                "How well does the paper fit the user's research priorities? "
+                "Earlier numbered priorities matter more than later ones. "
+                "Judge fit to the priorities, not general paper quality."
+            ),
+            "levels": _decisions_levels(dual_match=dual_match),
+        }
+    ]
+    if dual_match:
+        questions.extend(
+            [
+                {
+                    "type": "predicate",
+                    "name": "science_match",
+                    "instructions": "The paper clearly matches at least one of the user's science priorities.",
+                },
+                {
+                    "type": "predicate",
+                    "name": "method_match",
+                    "instructions": "The paper clearly matches at least one of the user's method priorities.",
+                },
+            ]
+        )
+    return questions
+
+
+def _decisions_input(preferences: PreferenceConfig, paper: ArxivPaper) -> str:
+    return (
+        f"{_priority_prompt_text(preferences)}\n\n"
+        "<paper>\n"
+        f"Title: {paper.title}\n"
+        f"Primary category: {paper.primary_category}\n"
+        f"Abstract: {paper.summary}\n"
+        "</paper>"
+    )
+
+
+def _ranked_from_decisions(
+    record: _CandidateRecord,
+    answers: list[Any],
+    *,
+    require_dual_match: bool,
+) -> RankedPaper:
+    by_name = {answer.get("name"): answer for answer in answers if isinstance(answer, dict)}
+    refused = [name for name, answer in by_name.items() if answer.get("type") == "refusal"]
+    if refused:
+        LOGGER.warning(
+            "Decisions API refused question(s) %s for %s; scoring the paper 0.",
+            ", ".join(str(name) for name in refused),
+            record.paper_key,
+        )
+        return RankedPaper(
+            paper=record.paper,
+            paper_key=record.paper_key,
+            source_id=record.source_id,
+            score=0.0,
+            rationale=f"Decisions API refused to answer: {', '.join(str(name) for name in refused)}.",
+            science_match=False if require_dual_match else None,
+            method_match=False if require_dual_match else None,
+        )
+
+    levels = _decisions_levels(dual_match=require_dual_match)
+    relevance = by_name.get("relevance")
+    raw_score = relevance.get("score") if relevance else None
+    if not isinstance(raw_score, (int, float)) or not 0 <= raw_score <= len(levels) - 1:
+        raise RankingPayloadError(f"Decisions API returned no valid relevance score for {record.paper_key}.")
+    score = round(float(raw_score) / (len(levels) - 1) * 100.0, 1)
+
+    probabilities = [item for item in relevance.get("probabilities") or [] if isinstance(item, dict)]
+    top = max(probabilities, key=lambda item: item.get("probability", 0.0), default=None)
+    parts = [f"level index {float(raw_score):.2f} of {len(levels) - 1}"]
+    if top is not None:
+        parts.append(f"most likely level '{top.get('label')}' (p={float(top.get('probability', 0.0)):.2f})")
+    if isinstance(relevance.get("confidence"), (int, float)):
+        parts.append(f"confidence {float(relevance['confidence']):.2f}")
+
+    science_match: bool | None = None
+    method_match: bool | None = None
+    if require_dual_match:
+        matches = {}
+        for name in ("science_match", "method_match"):
+            probability = (by_name.get(name) or {}).get("probability")
+            if not isinstance(probability, (int, float)):
+                raise RankingPayloadError(f"Decisions API returned no {name} probability for {record.paper_key}.")
+            matches[name] = probability >= _DECISIONS_MATCH_PROBABILITY
+            parts.append(f"{name} p={float(probability):.2f}")
+        science_match = matches["science_match"]
+        method_match = matches["method_match"]
+
+    return RankedPaper(
+        paper=record.paper,
+        paper_key=record.paper_key,
+        source_id=record.source_id,
+        score=score,
+        rationale="Decisions API: " + ", ".join(parts) + ".",
+        science_match=science_match,
+        method_match=method_match,
+    )
+
+
 _BATCH_OVERFLOW_FRACTION = 0.2
 
 
@@ -468,19 +617,28 @@ class PaperRanker:
             )
 
         dual_match_required = _requires_dual_match(preferences)
-        batches = _split_into_batches(candidates, self.batch_size) if self.batch_size > 0 else [candidates]
+        decisions_mode = self.config.mode == "decisions"
+        # Decisions scores are per paper and need no cross-batch calibration.
+        batches = (
+            _split_into_batches(candidates, self.batch_size)
+            if self.batch_size > 0 and not decisions_mode
+            else [candidates]
+        )
         LOGGER.info(
             "Ranking %s candidate(s) in %s batch(es).",
             len(candidates),
             len(batches),
         )
         all_ranked: list[RankedPaper] = []
-        for batch_index, batch in enumerate(batches, 1):
-            if len(batches) > 1:
-                LOGGER.info("Ranking batch %s/%s (%s candidate(s)).", batch_index, len(batches), len(batch))
-            batch_label = "ranking" if len(batches) == 1 else f"ranking-{batch_index:02d}"
-            batch_ranked = self._rank_candidates_batch(preferences, batch, label=batch_label)
-            all_ranked.extend(batch_ranked)
+        if decisions_mode:
+            all_ranked = self._rank_candidates_with_decisions(preferences, candidates)
+        else:
+            for batch_index, batch in enumerate(batches, 1):
+                if len(batches) > 1:
+                    LOGGER.info("Ranking batch %s/%s (%s candidate(s)).", batch_index, len(batches), len(batch))
+                batch_label = "ranking" if len(batches) == 1 else f"ranking-{batch_index:02d}"
+                batch_ranked = self._rank_candidates_batch(preferences, batch, label=batch_label)
+                all_ranked.extend(batch_ranked)
 
         if len(batches) > 1:
             finalist_threshold = max(0.0, self.min_selection_score - 10.0)
@@ -657,6 +815,32 @@ class PaperRanker:
             failure_label="Ranking provider call",
         )
 
+    def _rank_candidates_with_decisions(
+        self,
+        preferences: PreferenceConfig,
+        candidates: list[ArxivPaper],
+    ) -> list[RankedPaper]:
+        dual_match_required = _requires_dual_match(preferences)
+        questions = _decisions_questions(dual_match=dual_match_required)
+        if self.prompt_logger:
+            self.prompt_logger.write(
+                "ranking-decisions",
+                json.dumps(questions, indent=2),
+                "One Decisions request per candidate; each input is these priorities plus a <paper> block.\n\n"
+                f"{_priority_prompt_text(preferences)}",
+            )
+
+        def rank_one(record: _CandidateRecord) -> RankedPaper:
+            def call() -> RankedPaper:
+                answers = self.provider.decide(_decisions_input(preferences, record.paper), questions)
+                return _ranked_from_decisions(record, answers, require_dual_match=dual_match_required)
+
+            return self._with_retries(call, failure_label=f"Decisions ranking call for {record.paper_key}")
+
+        records = _candidate_records(candidates)
+        with ThreadPoolExecutor(max_workers=min(_DECISIONS_MAX_WORKERS, len(records))) as executor:
+            return list(executor.map(rank_one, records))
+
     def _call_provider_with_retries(
         self,
         system_prompt: str,
@@ -664,19 +848,25 @@ class PaperRanker:
         *,
         failure_label: str,
     ) -> str:
+        return self._with_retries(
+            lambda: self.provider.process_document(
+                content="",
+                is_pdf=False,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                max_tokens=self.config.max_output_tokens,
+                temperature=0.0,
+            ).strip(),
+            failure_label=failure_label,
+        )
+
+    def _with_retries(self, call: Callable[[], T], *, failure_label: str) -> T:
         max_attempts = max(1, self.config.retry_attempts)
         last_error: Exception | None = None
 
         for attempt in range(max_attempts):
             try:
-                return self.provider.process_document(
-                    content="",
-                    is_pdf=False,
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                    max_tokens=self.config.max_output_tokens,
-                    temperature=0.0,
-                ).strip()
+                return call()
             except Exception as error:
                 last_error = error
                 if not is_retryable_llm_error(error) or attempt == max_attempts - 1:

@@ -18,6 +18,7 @@ Supported providers:
 
 - CLI mode: `claude`, `codex`, `copilot`, `gemini`
 - API mode: `claude`, `openai`, `gemini`, `perplexity`, `ollama`, `openai-compatible`
+- Decisions mode (ranking only): `openai`
 
 ### 1. Run setup
 
@@ -96,6 +97,23 @@ model = "qwen2.5-coder-32b-instruct"
 ```
 
 Any field absent from `[llm-ranking]` or `[llm-summary]` falls back to the corresponding value in `[llm]`.
+
+To rank with the [OpenAI Decisions API](https://developers.openai.com/api/docs/guides/decisions) (`POST /v1/decisions`, public beta), set decisions mode in `[llm-ranking]` only:
+
+```toml
+[llm-ranking]
+mode = "decisions"
+provider = "openai"
+model = "gpt-6-luna"
+api_key_env = "OPENAI_API_KEY"
+env_file = ""   # optional, e.g. "user_preferences/.env" containing OPENAI_API_KEY=...
+min_summarize_score = 70   # optional; decisions mode only
+min_selection_score = 50   # optional; decisions mode only
+```
+
+Decisions scores sit lower on the 0-100 scale than text-ranker scores, so decisions mode has its own thresholds: `[llm-ranking].min_summarize_score` (default 70) and `[llm-ranking].min_selection_score` (default 50) replace the `[arxiv]` values for the daily-summary and weekly-interest cut-offs. On six announcement days (391 papers) these defaults selected about as many papers as the text rankers: 17 daily picks against 16, and 96 papers in picks plus weekly interest against 96. Text modes always use the `[arxiv]` thresholds, and setting these keys in `[llm-ranking]` without `mode = "decisions"` is an error.
+
+The Decisions API returns typed answers instead of text, so it cannot write summaries; `re-ass` refuses decisions mode in `[llm]` or `[llm-summary]`. Each candidate paper gets its own request (eight run at a time) with your priorities and the paper's title and abstract. The request asks a five-level relevance `score` question, mapped linearly onto the 0-100 scale used by `min_summarize_score` and `min_selection_score`, plus `science_match` and `method_match` predicates (a match at probability 0.5 or higher) when your preferences split Science and Methods. The run's ranking rationale records the most likely level and the probabilities in place of a written reason. `ranking_batch_size` is ignored in this mode, since each paper is scored on its own. Set `model` explicitly so it does not inherit a model name from `[llm]`. The key is read from `api_key_env` (default `OPENAI_API_KEY`) in the process environment, then from `env_file` when set, then from `~/.llm/.env.llm`.
 
 If you do not already have a Claude, Codex, or Gemini subscription, researchers and educators with an `.edu` email address may be eligible for [GitHub Education](https://github.com/education), which opens up higher-quality Copilot models through the GitHub Copilot CLI.
 

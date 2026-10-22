@@ -67,6 +67,16 @@ ranking_batch_size = 0  # 0 = no batching; set to e.g. 25 for local models that 
 # base_url = "http://127.0.0.1:1234/v1"
 # timeout_seconds = 7500  # local servers behind a queueing gate may hold a request for up to 2 h; keep this above that hold
 
+# Or rank with the OpenAI Decisions API (typed scores, no text; ranking only):
+# [llm-ranking]
+# mode = "decisions"
+# provider = "openai"
+# model = "gpt-6-luna"
+# api_key_env = "OPENAI_API_KEY"
+# env_file = ""  # optional, e.g. "user_preferences/.env" containing OPENAI_API_KEY=...
+# min_summarize_score = 70  # decisions mode only; replaces [arxiv].min_summarize_score
+# min_selection_score = 50  # decisions mode only; replaces [arxiv].min_selection_score
+
 # Optional: override specific fields for paper summarisation only.
 # [llm-summary]
 # mode = "api"

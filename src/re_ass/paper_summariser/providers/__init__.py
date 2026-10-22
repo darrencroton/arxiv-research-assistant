@@ -4,6 +4,7 @@ Provider selection is explicit:
     create_provider("cli", "claude")
     create_provider("api", "openai")
     create_provider("api", "openai-compatible")
+    create_provider("decisions", "openai")   # ranking only
 
 The program never switches mode or provider automatically. The requested mode
 and provider must both be valid, and any missing prerequisite must fail
@@ -16,7 +17,7 @@ import shutil
 
 from dotenv import load_dotenv
 
-from .api import ClaudeAPI, OpenAIAPI, GeminiAPI, PerplexityAPI, OllamaAPI, OpenAICompatibleAPI
+from .api import ClaudeAPI, OpenAIAPI, GeminiAPI, PerplexityAPI, OllamaAPI, OpenAICompatibleAPI, OpenAIDecisionsAPI
 from .cli import ClaudeCLI, CodexCLI, GeminiCLI, CopilotCLI
 
 load_dotenv()
@@ -37,6 +38,11 @@ _API_PROVIDERS = {
     "openai-compatible": OpenAICompatibleAPI,
 }
 
+# Decisions mode returns typed answers instead of text, so it serves ranking only.
+_DECISIONS_PROVIDERS = {
+    "openai": OpenAIDecisionsAPI,
+}
+
 _API_KEY_ENV_VARS = {
     "claude": "ANTHROPIC_API_KEY",
     "gemini": "GOOGLE_API_KEY",
@@ -44,7 +50,7 @@ _API_KEY_ENV_VARS = {
     "perplexity": "PERPLEXITY_API_KEY",
 }
 
-SUPPORTED_MODES = ("cli", "api")
+SUPPORTED_MODES = ("cli", "api", "decisions")
 
 
 def _registry_for_mode(mode):
@@ -53,6 +59,8 @@ def _registry_for_mode(mode):
         return _CLI_PROVIDERS
     if mode == "api":
         return _API_PROVIDERS
+    if mode == "decisions":
+        return _DECISIONS_PROVIDERS
     raise ValueError(
         f"Unknown mode '{mode}'. Supported modes: {', '.join(SUPPORTED_MODES)}."
     )
@@ -72,6 +80,9 @@ def _validate_prerequisites(mode, provider_name, provider_class):
                 f"Cannot start mode '{mode}' with provider '{provider_name}': "
                 f"required CLI binary '{cli_command}' was not found on PATH."
             )
+        return
+    if mode == "decisions":
+        # The provider resolves its key itself, from the environment or an env file.
         return
 
     api_key_env = _API_KEY_ENV_VARS.get(provider_name)

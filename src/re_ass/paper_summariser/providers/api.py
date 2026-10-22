@@ -44,7 +44,7 @@ def _lookup_env_file_value(path: Path, key: str) -> str:
     return ""
 
 
-def _resolve_api_key(api_key_env: str, env_file: Path | None) -> str:
+def _resolve_api_key(api_key_env: str, env_file: Path | None, *, provider_label: str = "OpenAI-compatible API") -> str:
     """Resolve an API key from the environment, then an optional/default env file."""
     if not api_key_env:
         return ""
@@ -59,7 +59,7 @@ def _resolve_api_key(api_key_env: str, env_file: Path | None) -> str:
         return api_key
 
     raise ValueError(
-        f"OpenAI-compatible API provider is configured with [llm].api_key_env={api_key_env!r}, "
+        f"{provider_label} provider is configured with [llm].api_key_env={api_key_env!r}, "
         f"but that environment variable is not set and no value was found in {candidate}."
     )
 
@@ -438,3 +438,61 @@ class OllamaAPI(Provider):
 
     def get_max_context_size(self):
         return self.default_context_size
+
+
+class OpenAIDecisionsAPI(Provider):
+    """OpenAI Decisions API provider (`POST /v1/decisions`), for ranking only.
+
+    The Decisions API returns typed answers (predicate probabilities, choices,
+    scores) to questions defined by the caller and never generates text, so it
+    cannot summarise papers. The pinned `openai` 1.x SDK has no `decisions`
+    resource; the request goes through the client's generic `post`, which keeps
+    the SDK's auth, timeout, and `APIStatusError` handling.
+    """
+
+    default_model = "gpt-6-luna"
+    default_api_key_env = "OPENAI_API_KEY"
+    default_timeout = 120
+
+    def setup(self):
+        """Initialise an OpenAI client for the Decisions endpoint."""
+        import openai
+
+        if not self.model:
+            self.model = self.default_model
+        api_key_env = str(self.config.get("api_key_env") or self.default_api_key_env).strip()
+        raw_env_file = str(self.config.get("env_file") or "").strip()
+        env_file = Path(raw_env_file).expanduser() if raw_env_file else None
+        api_key = _resolve_api_key(api_key_env, env_file, provider_label="OpenAI Decisions API")
+        base_url = str(self.config.get("base_url") or "").strip().rstrip("/") or None
+        self.client = openai.OpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=float(self.config.get("timeout") or self.default_timeout),
+            max_retries=0,
+        )
+
+    def validate_runtime_ready(self):
+        """Fail early when the API key is rejected, before a full run starts."""
+        try:
+            self.client.models.list()
+        except Exception as error:
+            raise ValueError(f"OpenAI Decisions API credentials could not be verified: {error}") from error
+
+    def decide(self, input_text, questions):
+        """Send one Decisions request and return its `answers` list."""
+        response = self.client.post(
+            "/decisions",
+            body={"model": self.model, "input": input_text, "questions": questions},
+            cast_to=object,
+        )
+        answers = response.get("answers") if isinstance(response, dict) else None
+        if not isinstance(answers, list):
+            raise ValueError("OpenAI Decisions API response did not contain an 'answers' list.")
+        return answers
+
+    def process_document(self, content, is_pdf, system_prompt, user_prompt, max_tokens=12288, temperature=None):
+        """The Decisions API returns typed answers only, so it cannot generate summaries."""
+        raise ValueError(
+            "OpenAI Decisions API cannot generate text; use mode = \"decisions\" only in [llm-ranking]."
+        )
