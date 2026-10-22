@@ -130,6 +130,7 @@ class OpenAIAPI(Provider):
             raise ValueError("OPENAI_API_KEY environment variable not set")
 
         self.client = openai.OpenAI(api_key=api_key)
+        self._temperature_supported = True
         if not self.model:
             self.model = self.default_model
 
@@ -151,24 +152,53 @@ class OpenAIAPI(Provider):
                     ],
                 },
             ]
-            response = self.client.responses.create(
+            response = self._create_with_temperature_fallback(
+                self.client.responses.create,
+                effective_temperature,
                 model=self.model,
                 input=input_content,
-                temperature=effective_temperature,
                 max_output_tokens=max_tokens,
             )
-            return response.output[0].content[0].text
+            # Reasoning models put a reasoning item before the message, so output[0] may have no text.
+            return response.output_text
         else:
-            response = self.client.chat.completions.create(
+            # Current OpenAI chat models reject the legacy ``max_tokens`` name.
+            response = self._create_with_temperature_fallback(
+                self.client.chat.completions.create,
+                effective_temperature,
                 model=self.model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                temperature=effective_temperature,
-                max_tokens=max_tokens,
+                max_completion_tokens=max_tokens,
             )
             return response.choices[0].message.content
+
+    def _create_with_temperature_fallback(self, create, temperature, **kwargs):
+        """Call ``create`` with ``temperature``, retrying once without it if the model rejects it.
+
+        Some OpenAI models (e.g. ``gpt-6-*``) only accept the default temperature and return
+        a 400 with ``param == "temperature"``. The rejection is remembered on the provider
+        instance so later calls omit the parameter.
+        """
+        import openai
+
+        if self._temperature_supported:
+            try:
+                return create(**kwargs, temperature=temperature)
+            except openai.BadRequestError as exc:
+                if getattr(exc, "param", None) != "temperature":
+                    raise
+                LOGGER.warning(
+                    "OpenAI model %s rejected temperature=%s (%s); retrying without temperature "
+                    "and omitting it for later calls.",
+                    self.model,
+                    temperature,
+                    getattr(exc, "message", exc),
+                )
+                self._temperature_supported = False
+        return create(**kwargs)
 
     def get_max_context_size(self):
         return self.default_context_size

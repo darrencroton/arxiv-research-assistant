@@ -1,8 +1,10 @@
 import logging
 
+import httpx
+import openai
 import pytest
 
-from re_ass.paper_summariser.providers.api import OpenAICompatibleAPI
+from re_ass.paper_summariser.providers.api import OpenAIAPI, OpenAICompatibleAPI
 
 
 class FakeModelsResponse:
@@ -200,3 +202,120 @@ def test_openai_compatible_fails_fast_when_configured_api_key_is_missing(
                 "env_file": str(tmp_path / "missing.env"),
             }
         )
+
+
+def _bad_request(param: str, message: str) -> openai.BadRequestError:
+    request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+    response = httpx.Response(400, request=request)
+    body = {"message": message, "type": "invalid_request_error", "param": param, "code": "unsupported_value"}
+    return openai.BadRequestError(message, response=response, body=body)
+
+
+class ScriptedCreate:
+    """Records each call and raises queued errors before returning ``result``."""
+
+    def __init__(self, result, errors=()) -> None:
+        self.result = result
+        self.errors = list(errors)
+        self.calls: list[dict[str, object]] = []
+
+    def __call__(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.errors:
+            raise self.errors.pop(0)
+        return self.result
+
+
+def _chat_result(text: str = "chat output"):
+    message = type("Message", (), {"content": text})
+    choice = type("Choice", (), {"message": message, "finish_reason": "stop"})
+    return type("Response", (), {"choices": [choice]})
+
+
+def _responses_result(text: str = "pdf output"):
+    # Reasoning models emit a reasoning item (no text) before the message; the SDK's
+    # ``output_text`` joins the message text.
+    reasoning = type("Reasoning", (), {"type": "reasoning", "content": []})
+    return type("Response", (), {"output": [reasoning], "output_text": text})
+
+
+def _make_openai_provider(monkeypatch: pytest.MonkeyPatch, *, chat_create=None, responses_create=None) -> OpenAIAPI:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    def fake_openai_client(**kwargs):
+        completions = type("Completions", (), {"create": staticmethod(chat_create)})
+        chat = type("Chat", (), {"completions": completions})
+        responses = type("Responses", (), {"create": staticmethod(responses_create)})
+        return type("Client", (), {"chat": chat, "responses": responses})
+
+    monkeypatch.setattr("openai.OpenAI", fake_openai_client)
+    return OpenAIAPI({"model": "gpt-test", "temperature": 0.2})
+
+
+def test_openai_chat_sends_max_completion_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
+    create = ScriptedCreate(_chat_result())
+    provider = _make_openai_provider(monkeypatch, chat_create=create)
+
+    output = provider.process_document("", False, "system prompt", "user prompt", max_tokens=4096, temperature=0.0)
+
+    assert output == "chat output"
+    assert create.calls == [
+        {
+            "model": "gpt-test",
+            "messages": [
+                {"role": "system", "content": "system prompt"},
+                {"role": "user", "content": "user prompt"},
+            ],
+            "max_completion_tokens": 4096,
+            "temperature": 0.0,
+        }
+    ]
+
+
+def test_openai_chat_drops_rejected_temperature_and_remembers(monkeypatch: pytest.MonkeyPatch, caplog) -> None:
+    error = _bad_request(
+        "temperature",
+        "Unsupported value: 'temperature' does not support 0.0 with this model. "
+        "Only the default (1) value is supported.",
+    )
+    create = ScriptedCreate(_chat_result(), errors=[error])
+    provider = _make_openai_provider(monkeypatch, chat_create=create)
+
+    with caplog.at_level(logging.WARNING):
+        first = provider.process_document("", False, "system", "user", max_tokens=100, temperature=0.0)
+        second = provider.process_document("", False, "system", "user", max_tokens=100, temperature=0.0)
+
+    assert first == second == "chat output"
+    assert [("temperature" in call) for call in create.calls] == [True, False, False]
+    assert all(call["max_completion_tokens"] == 100 for call in create.calls)
+    warnings = [record for record in caplog.records if "rejected temperature" in record.getMessage()]
+    assert len(warnings) == 1
+
+
+def test_openai_chat_reraises_other_bad_requests(monkeypatch: pytest.MonkeyPatch) -> None:
+    error = _bad_request("max_tokens", "Unsupported parameter: 'max_tokens' is not supported with this model.")
+    create = ScriptedCreate(_chat_result(), errors=[error])
+    provider = _make_openai_provider(monkeypatch, chat_create=create)
+
+    with pytest.raises(openai.BadRequestError):
+        provider.process_document("", False, "system", "user", max_tokens=100, temperature=0.0)
+
+    assert len(create.calls) == 1
+
+
+def test_openai_pdf_uses_responses_api_with_temperature_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    error = _bad_request("temperature", "Unsupported parameter: 'temperature' is not supported with this model.")
+    create = ScriptedCreate(_responses_result(), errors=[error])
+    provider = _make_openai_provider(monkeypatch, responses_create=create)
+
+    output = provider.process_document(b"%PDF-1.4", True, "system", "user", max_tokens=2048)
+
+    assert output == "pdf output"
+    assert len(create.calls) == 2
+    first, second = create.calls
+    assert first["temperature"] == 0.2
+    assert first["max_output_tokens"] == 2048
+    assert "max_tokens" not in first
+    assert first["input"][1]["content"][1]["filename"] == "document.pdf"
+    assert "temperature" not in second
+    assert {key: value for key, value in first.items() if key != "temperature"} == second
